@@ -1,32 +1,99 @@
-# AI-Powered Disaster Response and Smart Evacuation Platform
+# 🚨 AI Disaster Response & Emergency Alert Platform
 
-A web-based disaster response platform designed to improve flood preparedness and emergency response using **machine learning, citizen incident reporting, and intelligent risk assessment**.
+An interactive, AI-powered real-time emergency alert and hazard mapping platform. This application empowers citizens to report local disasters (such as floods, landslides, and fallen trees), dynamically visualizes severe alerts within a localized radius using interactive maps, and provides seamless verification and resolution workflows.
 
-## Features
+---
 
-* User registration and login with **JWT authentication**
-* Citizen incident reporting with image upload and location details
-* Incident management using **MongoDB**
-* Flood-risk prediction using **Machine Learning**
-* Risk classification into **Low, Moderate, High, and Critical**
-* REST APIs using **Flask**
-* Responsive frontend using **React.js and Vite**
+## 🌟 Key Features
 
-## Technology Stack
+* **Interactive Emergency Map:** Leverages Leaflet maps to plot real-time incidents and display interactive radius-based location filters (e.g., 15 km filter).
+* **Custom Animated Map Pins:** Custom CSS-based pulsing map markers ensure reliable location pin rendering across modern UI frameworks.
+* **Reverse Geocoding:** Automatically translates raw latitude/longitude coordinates into clean, human-readable city, suburb, and area names via OpenStreetMap's Nominatim API.
+* **Live GPS Location:** Automatically centers the map on the user's current GPS location upon initial page load.
+* **Citizen Proof Verification & Resolution:** Allows users or authorities to resolve active hazards directly by uploading a proof image, automatically updating the backend database.
+* **Dynamic Media Serving:** Integrates image uploads for reports with server-side static asset serving.
+* **Severity Color-Coding:** Incidents are categorized and visually flagged by severity level (High, Medium, Info).
 
-* **Frontend:** React.js, Vite, JavaScript, CSS
-* **Backend:** Python, Flask, Flask-CORS
-* **Database:** MongoDB, PyMongo
-* **Machine Learning:** Scikit-learn, XGBoost
-* **Authentication:** JWT, password hashing
-* **Tools:** Git, GitHub, VS Code
+---
 
-## Current Status
+## 🛠️ Tech Stack
 
-The core web application, authentication, incident reporting, database integration, and flood-risk prediction functionality have been implemented.
+### **Frontend**
+* **Framework:** React.js (Vite)
+* **Mapping:** Leaflet & React-Leaflet
+* **HTTP Client:** Axios
+* **Styling:** CSS3 / Custom Styled Components
 
-Future development will include **computer-vision-based incident verification, interactive disaster maps, relief shelters, smart evacuation routes, emergency alerts, and an administrator dashboard**.
+### **Backend**
+* **Framework:** Python (Flask / FastAPI)
+* **Database:** MongoDB / PostgreSQL (Geospatial querying support)
+* **Reverse Geocoding:** OpenStreetMap Nominatim API
 
-## Project Goal
+---
 
-To provide a data-driven platform that helps citizens and authorities **identify flood risks, report incidents, and improve disaster response and evacuation planning**.
+## 🚀 Getting Started
+
+### Prerequisites
+Make sure you have the following installed on your system:
+* [Node.js](https://nodejs.org/) (v16+)
+* [Python](https://www.python.org/) (v3.10+)
+* [Git](https://git-scm.com/)
+
+---
+
+### 📥 Installation & Setup
+
+#### 1. Clone the Repository
+```bash
+git clone [https://github.com/your-username/AI-Disaster-Response.git](https://github.com/your-username/AI-Disaster-Response.git)
+cd AI-Disaster-Response
+
+2. Backend Setup
+# Navigate to backend directory
+cd backend
+
+# Create a virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# On Windows (Command Prompt):
+venv\Scripts\activate
+# On Windows (PowerShell):
+.\venv\Scripts\Activate.ps1
+# On macOS/Linux:
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the backend server
+python run.py
+
+3. Frontend Setup
+# Navigate to frontend directory (from project root)
+cd frontend
+
+# Install Node dependencies
+npm install
+
+# Start development server
+npm run dev
+
+📂 Project Structure
+AI-Disaster-Response/
+├── backend/
+│   ├── app/
+│   │   ├── models/          # Database models (User, Incident, Shelter)
+│   │   ├── routes/          # API Endpoint routes (incidents, auth, alerts)
+│   │   ├── services/        # Business logic & ML integration
+│   │   └── utils/           # Database helpers & auth middleware
+│   ├── uploads/             # Server storage for incident & resolution images
+│   └── run.py               # Application entry point
+├── frontend/
+│   ├── src/
+│   │   ├── api/             # Axios API base configuration
+│   │   ├── components/      # Reusable UI components
+│   │   └── pages/           # Application views (Alerts, AdminDashboard, etc.)
+│   └── package.json
+├── .gitignore
+└── README.md
