@@ -10,10 +10,12 @@ from app.routes.auth import auth_bp
 from app.routes.admin_routes import admin_bp
 from app.routes.incident_routes import init_incident_routes
 from app.routes.flood_routes import flood_bp
+from app.routes.shelter_routes import shelter_bp
 
 load_dotenv()
 
 app = Flask(__name__)
+app.url_map.strict_slashes = False
 CORS(app, supports_credentials=True)
 
 bcrypt.init_app(app)
@@ -21,6 +23,9 @@ bcrypt.init_app(app)
 app.config['MONGO_URI'] = os.getenv("MONGO_URI", "mongodb://localhost:27017/disaster_guard")
 mongo = PyMongo(app)
 db = mongo.db
+
+# Store db instance on app.config or attach it so flood_bp can access it cleanly
+app.config['DB'] = db
 
 # --- ML MODEL INTEGRATION ---
 MODELS_DIR = os.path.join(os.path.dirname(__file__), 'models')
@@ -30,7 +35,6 @@ PREPROCESSOR_PATH = os.path.join(MODELS_DIR, 'flood_risk_preprocessor.pkl')
 ml_model = None
 preprocessor = None
 
-# 1. Load XGBoost Model
 try:
     if os.path.exists(MODEL_PATH):
         with open(MODEL_PATH, 'rb') as f:
@@ -41,7 +45,6 @@ try:
 except Exception as e:
     print(f"Error loading ML model: {e}")
 
-# 2. Load Preprocessor
 try:
     if os.path.exists(PREPROCESSOR_PATH):
         with open(PREPROCESSOR_PATH, 'rb') as f:
@@ -70,6 +73,7 @@ app.register_blueprint(auth_bp, url_prefix='/api')
 app.register_blueprint(admin_bp, url_prefix='/api')
 app.register_blueprint(incident_bp, url_prefix='/api')
 app.register_blueprint(flood_bp, url_prefix='/api')
+from app.routes.shelter_routes import shelter_bp
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000, use_reloader=False)
