@@ -5,7 +5,6 @@ import API from '../api/axios';
 import ShelterCard from '../components/ShelterCard';
 import AddShelterModal from '../components/AddShelterModal';
 
-// Fix Leaflet Default Icon Assets Path Bug in Webpack/Vite
 import iconUrl from 'leaflet/dist/images/marker-icon.png';
 import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png';
 import shadowUrl from 'leaflet/dist/images/marker-shadow.png';
@@ -17,10 +16,9 @@ L.Icon.Default.mergeOptions({
   shadowUrl,
 });
 
-// Utility: Calculate Haversine distance in km
 function calculateDistance(lat1, lon1, lat2, lon2) {
   if (!lat1 || !lon1 || !lat2 || !lon2) return '0.0';
-  const R = 6371; // Earth's radius in km
+  const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
   const a =
@@ -33,19 +31,18 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return (R * c).toFixed(1);
 }
 
-function LiveMap({ activeLayer, incidents, shelters, selectedShelter, onShelterSelect, userCoords, onLocationChange }) {
+function LiveMap({ activeLayer, incidents, shelters, selectedShelter, onShelterSelect, userCoords, onLocationChange, safeRoute }) {
   const mapElement = useRef(null);
   const mapRef = useRef(null);
   const locationMarker = useRef(null);
   const tappedMarker = useRef(null);
+  const routeLayerRef = useRef(null);
 
-  // Maintain refs for callbacks to keep Leaflet event listeners fresh without re-mounting map
   const onLocationChangeRef = useRef(onLocationChange);
   useEffect(() => {
     onLocationChangeRef.current = onLocationChange;
   }, [onLocationChange]);
 
-  // Safely update or pan map location without throwing _leaflet_pos error
   const updateLocationPoint = useCallback((lat, lng) => {
     const map = mapRef.current;
     if (!map || !map.getContainer() || !map._loaded) return;
@@ -88,7 +85,6 @@ function LiveMap({ activeLayer, incidents, shelters, selectedShelter, onShelterS
     }
   }, []);
 
-  // Initialize Leaflet Map Instance once
   useEffect(() => {
     if (!mapElement.current || mapRef.current) return;
 
@@ -152,23 +148,43 @@ function LiveMap({ activeLayer, incidents, shelters, selectedShelter, onShelterS
       locationMarker.current = null;
       tappedMarker.current = null;
     };
-  }, []); // Run once on mount
+  }, []);
 
-  // Sync external userCoords changes to map if updated via inputs or manual selection
   useEffect(() => {
     if (userCoords?.lat && userCoords?.lng && mapRef.current && mapRef.current._loaded) {
       updateLocationPoint(userCoords.lat, userCoords.lng);
     }
   }, [userCoords?.lat, userCoords?.lng, updateLocationPoint]);
 
-  // Dynamic Markers and Overlay Layers
+  // Render Blue Polyline Only
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map._loaded) return;
+
+    if (routeLayerRef.current) {
+      map.removeLayer(routeLayerRef.current);
+      routeLayerRef.current = null;
+    }
+
+    if (safeRoute && safeRoute.coordinates && safeRoute.coordinates.length > 0) {
+      const polylineCoords = safeRoute.coordinates.map((c) => [c[1], c[0]]);
+      routeLayerRef.current = L.polyline(polylineCoords, {
+        color: '#2563eb', // Always Blue line
+        weight: 6,
+        opacity: 0.9,
+        lineJoin: 'round',
+      }).addTo(map);
+
+      map.fitBounds(routeLayerRef.current.getBounds(), { padding: [40, 40] });
+    }
+  }, [safeRoute]);
+
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !map._loaded) return;
 
     const layerGroup = L.layerGroup().addTo(map);
 
-    // Shelter Markers Layer
     if (activeLayer !== 'risk') {
       shelters.forEach((shelter) => {
         const shelterLat = shelter.lat;
@@ -189,23 +205,22 @@ function LiveMap({ activeLayer, incidents, shelters, selectedShelter, onShelterS
             `<b>${shelter.name}</b><br/>ML Safety: <b>${shelter.is_safe ? 'Safe' : 'Unsafe'}</b><br/>Distance: ${shelter.distance}`
           )
           .on('click', () => onShelterSelect(shelter));
-
+          
         layerGroup.addLayer(circle);
       });
     }
 
-    // Incident Markers Layer
     if (activeLayer !== 'shelters') {
       incidents.forEach((incident) => {
-        const coordinates = incident.location?.coordinates;
+        let coordinates = incident.location?.coordinates || (incident.lat && incident.lng ? [incident.lng, incident.lat] : null);
         if (Array.isArray(coordinates) && coordinates.length === 2) {
           const incidentMarker = L.circleMarker([coordinates[1], coordinates[0]], {
-            radius: 8,
+            radius: 9,
             color: '#fff',
             weight: 2,
             fillColor: '#ef6a55',
             fillOpacity: 1,
-          }).bindTooltip(incident.type || incident.description || 'Verified Incident');
+          }).bindTooltip(incident.type || incident.description || 'Verified Hazard / Incident');
 
           layerGroup.addLayer(incidentMarker);
         }
@@ -232,20 +247,135 @@ export default function Dashboard() {
   const [selectedShelter, setSelectedShelter] = useState(null);
   const [locationMessage, setLocationMessage] = useState('Acquiring location...');
 
-  // State for Citizen Shelter Form Modal
+  const [safeRoute, setSafeRoute] = useState(null);
+  const [isCalculatingRoute, setIsCalculatingRoute] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   const activeAbortController = useRef(null);
   const lastFetchedCoords = useRef({ lat: null, lng: null });
 
-  // Fetch verified incident reports
+  useEffect(() => {
+    setSafeRoute(null);
+  }, [selectedShelter]);
+
   useEffect(() => {
     API.get('/incidents/verified')
       .then((res) => setIncidents(res.data.data || res.data || []))
       .catch((err) => console.error('Error loading verified incidents:', err));
   }, []);
 
-  // Fetch nearby shelters and prediction risk levels
+ // Dynamic geometry hazard check with local street buffer (0.3 km)
+const checkRouteHasHazards = (geometryCoordinates, hazardsList) => {
+  let breachCount = 0;
+  let minDistanceToHazard = Infinity;
+
+  for (let coord of geometryCoordinates) {
+    const routeLng = coord[0];
+    const routeLat = coord[1];
+
+    for (let hazard of hazardsList) {
+      const dist = parseFloat(calculateDistance(routeLat, routeLng, hazard.lat, hazard.lng));
+      
+      if (dist < minDistanceToHazard) {
+        minDistanceToHazard = dist;
+      }
+
+      // Localized street buffer: 300 meters (0.3 km)
+      if (dist < 0.3) {
+        breachCount++;
+      }
+    }
+  }
+
+  return {
+    hasConflict: breachCount > 0,
+    breachCount,
+    minDistanceToHazard,
+  };
+};
+
+const handleShowDirections = async () => {
+  if (!selectedShelter || !userCoords.lat || !userCoords.lng) return;
+
+  const destLat = selectedShelter.lat;
+  const destLng = selectedShelter.lng || selectedShelter.lon;
+
+  setIsCalculatingRoute(true);
+
+  try {
+    const hazards = incidents
+      .map((inc) => {
+        const typeStr = (inc.type || inc.description || inc.title || '').toLowerCase();
+        const isFlood = typeStr.includes('flood') || typeStr.includes('water');
+        let coords = inc.location?.coordinates;
+
+        if (Array.isArray(coords) && coords.length === 2) {
+          return { lat: coords[1], lng: coords[0], isFlood };
+        } else if (inc.lat && (inc.lng || inc.lon)) {
+          return { lat: inc.lat, lng: inc.lng || inc.lon, isFlood };
+        }
+        return null;
+      })
+      .filter(Boolean);
+
+    // Fetch primary + alternative local routes strictly from OSRM
+    const osrmBaseUrl = `https://router.project-osrm.org/route/v1/driving/${userCoords.lng},${userCoords.lat};${destLng},${destLat}?overview=full&geometries=geojson&alternatives=true`;
+    const res = await fetch(osrmBaseUrl);
+    const data = await res.json();
+
+    if (!data.routes || data.routes.length === 0) {
+      setIsCalculatingRoute(false);
+      return;
+    }
+
+    let bestRoute = null;
+
+    // 1. Try to find a completely safe route
+    for (let route of data.routes) {
+      const evaluation = checkRouteHasHazards(route.geometry.coordinates, hazards);
+      if (!evaluation.hasConflict) {
+        bestRoute = route;
+        break;
+      }
+    }
+
+    // 2. If ALL alternatives pass near the hazard, pick the alternative with the fewest hazard intersections
+    if (!bestRoute) {
+      let lowestBreaches = Infinity;
+      
+      for (let route of data.routes) {
+        const evalResult = checkRouteHasHazards(route.geometry.coordinates, hazards);
+        if (evalResult.breachCount < lowestBreaches) {
+          lowestBreaches = evalResult.breachCount;
+          bestRoute = route;
+        }
+      }
+    }
+
+    // Fallback to primary route
+    if (!bestRoute) {
+      bestRoute = data.routes[0];
+    }
+
+    // Double-check total distance safety cap (if route exceeds 25 km for a local trip, enforce direct route)
+    const routeDistanceKm = bestRoute.distance / 1000;
+    if (routeDistanceKm > 25) {
+      bestRoute = data.routes[0];
+    }
+
+    setSafeRoute({
+      coordinates: bestRoute.geometry.coordinates,
+      distance: (bestRoute.distance / 1000).toFixed(1),
+      duration: Math.round(bestRoute.duration / 60),
+    });
+  } catch (err) {
+    console.error('Error calculating route:', err);
+  } finally {
+    setIsCalculatingRoute(false);
+  }
+};
+
+
   const fetchNearbyInstitutions = useCallback(async (lat, lng, force = false) => {
     if (
       !force &&
@@ -293,7 +423,6 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Dynamic handler when a citizen submits a new shelter
   const handleShelterAdded = (newShelter) => {
     const shelterLat = parseFloat(newShelter.lat || userCoords.lat);
     const shelterLng = parseFloat(newShelter.lon || newShelter.lng || userCoords.lng);
@@ -331,7 +460,6 @@ export default function Dashboard() {
         </div>
       </section>
 
-      {/* Map Section */}
       <section className="dashboard-section map-section">
         <div className="section-heading">
           <div>
@@ -358,6 +486,7 @@ export default function Dashboard() {
           onShelterSelect={setSelectedShelter}
           userCoords={userCoords}
           onLocationChange={handleLocationChange}
+          safeRoute={safeRoute}
         />
 
         <div className="map-selection" style={{ marginTop: '1rem' }}>
@@ -376,9 +505,34 @@ export default function Dashboard() {
             {locationMessage}
           </span>
         </div>
+
+        <div style={{ marginTop: '1rem' }}>
+          <button
+            onClick={handleShowDirections}
+            disabled={!selectedShelter || isCalculatingRoute}
+            style={{
+              backgroundColor: '#10b981',
+              color: '#ffffff',
+              border: 'none',
+              padding: '12px 20px',
+              borderRadius: '8px',
+              fontWeight: 'bold',
+              cursor: selectedShelter && !isCalculatingRoute ? 'pointer' : 'not-allowed',
+              opacity: selectedShelter && !isCalculatingRoute ? 1 : 0.6,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)',
+              width: '100%',
+              fontSize: '1rem',
+            }}
+          >
+            {isCalculatingRoute ? '🔄 Calculating Safe Route...' : '🗺️ Show Directions'}
+          </button>
+        </div>
       </section>
 
-      {/* Shelters Grid Section */}
       <section className="dashboard-section">
         <div
           className="section-heading"
@@ -391,7 +545,6 @@ export default function Dashboard() {
             </span>
           </div>
 
-          {/* Citizen Authority Action Trigger */}
           <button
             onClick={() => setIsModalOpen(true)}
             style={{
@@ -424,7 +577,6 @@ export default function Dashboard() {
         </div>
       </section>
 
-      {/* ML Risk Evaluation Table */}
       <section className="dashboard-section">
         <div className="section-heading">
           <div>
@@ -462,7 +614,6 @@ export default function Dashboard() {
         </div>
       </section>
 
-      {/* Citizen Report Shelter Modal */}
       <AddShelterModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
