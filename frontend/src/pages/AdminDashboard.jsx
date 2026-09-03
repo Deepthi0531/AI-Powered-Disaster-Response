@@ -15,7 +15,6 @@ const cardStyle = {
   textAlign: 'center',
 };
 
-// Fix Leaflet marker icon rendering issues in React
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
@@ -23,13 +22,13 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-// Interactive map click handler
 function LocationPicker({ onLocationSelect }) {
   useMapEvents({
-    click(e) {
-      onLocationSelect(e.latlng.lat, e.latlng.lng);
+    click(event) {
+      onLocationSelect(event.latlng.lat, event.latlng.lng);
     },
   });
+
   return null;
 }
 
@@ -43,6 +42,7 @@ export default function AdminDashboard() {
     verified_incidents: 0,
     total_shelters: 0,
   });
+
   const [incidents, setIncidents] = useState([]);
   const [shelters, setShelters] = useState([]);
   const [passcode, setPasscode] = useState('');
@@ -57,12 +57,6 @@ export default function AdminDashboard() {
     contact: '',
   });
 
-  // const [alertForm, setAlertForm] = useState({
-  //   region: '',
-  //   severity: 'CRITICAL',
-  //   message: '',
-  // });
-
   useEffect(() => {
     if (isVerified) {
       fetchStats();
@@ -73,33 +67,33 @@ export default function AdminDashboard() {
 
   const fetchStats = async () => {
     try {
-      const res = await API.get('/admin/stats');
-      setStats(res.data);
-    } catch (err) {
-      console.error('Error fetching stats:', err);
+      const response = await API.get('/admin/stats');
+      setStats(response.data);
+    } catch (error) {
+      console.error('Error fetching stats:', error);
     }
   };
 
   const fetchIncidents = async () => {
     try {
-      const res = await API.get('/admin/incidents');
-      setIncidents(res.data);
-    } catch (err) {
-      console.error('Error fetching incidents:', err);
+      const response = await API.get('/admin/incidents');
+      setIncidents(response.data);
+    } catch (error) {
+      console.error('Error fetching incidents:', error);
     }
   };
 
   const fetchShelters = async () => {
     try {
-      const res = await API.get('/admin/shelters');
-      setShelters(res.data);
-    } catch (err) {
-      console.error('Error fetching shelters:', err);
+      const response = await API.get('/admin/shelters');
+      setShelters(response.data);
+    } catch (error) {
+      console.error('Error fetching shelters:', error);
     }
   };
 
-  const handlePasscodeSubmit = (e) => {
-    e.preventDefault();
+  const handlePasscodeSubmit = (event) => {
+    event.preventDefault();
 
     if (passcode === ADMIN_GATE_PASSCODE) {
       setIsVerified(true);
@@ -114,23 +108,22 @@ export default function AdminDashboard() {
       await API.patch(`/admin/incidents/${id}/verify`, { status });
       fetchIncidents();
       fetchStats();
-    } catch (err) {
-      console.error('Error updating incident status:', err);
+    } catch (error) {
+      console.error('Error updating incident status:', error);
       alert('Unable to update incident status.');
     }
   };
 
-  // Maps click coordinates directly to state
   const handleMapClick = (lat, lng) => {
-    setNewShelter((prev) => ({
-      ...prev,
+    setNewShelter((previous) => ({
+      ...previous,
       lat: lat.toFixed(6),
       lng: lng.toFixed(6),
     }));
   };
 
-  const handleAddShelter = async (e) => {
-    e.preventDefault();
+  const handleAddShelter = async (event) => {
+    event.preventDefault();
 
     try {
       await API.post('/admin/shelters', {
@@ -151,29 +144,28 @@ export default function AdminDashboard() {
       fetchShelters();
       fetchStats();
       alert('Shelter successfully registered!');
-    } catch (err) {
-      console.error('Error adding shelter:', err);
+    } catch (error) {
+      console.error('Error adding shelter:', error);
       alert('Unable to add shelter.');
     }
   };
 
-  const handleSendAlert = async (e) => {
-    e.preventDefault();
-
-    try {
-      await API.post('/admin/alerts/broadcast', alertForm);
-
-      alert('Emergency alert broadcasted successfully.');
-
-      setAlertForm({
-        region: '',
-        severity: 'CRITICAL',
-        message: '',
-      });
-    } catch (err) {
-      console.error('Error broadcasting alert:', err);
-      alert('Unable to broadcast alert.');
+  const formatReportedDateTime = (dateValue) => {
+    if (!dateValue) {
+      return 'Date unavailable';
     }
+
+    const date = new Date(dateValue);
+
+    if (Number.isNaN(date.getTime())) {
+      return 'Date unavailable';
+    }
+
+    return date.toLocaleString('en-IN', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      hour12: true,
+    });
   };
 
   if (!isVerified) {
@@ -201,12 +193,16 @@ export default function AdminDashboard() {
 
         <form
           onSubmit={handlePasscodeSubmit}
-          style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '14px',
+          }}
         >
           <input
             type="password"
             value={passcode}
-            onChange={(e) => setPasscode(e.target.value)}
+            onChange={(event) => setPasscode(event.target.value)}
             placeholder="Admin passcode"
             style={{
               padding: '12px',
@@ -240,15 +236,30 @@ export default function AdminDashboard() {
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
       <h2>Admin Control Tower</h2>
+
       <p style={{ marginTop: '8px' }}>
         Welcome back, {user?.username || user?.name || 'Admin'}.
       </p>
 
-      <div style={{ marginBottom: '20px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-        <button onClick={() => setActiveTab('dashboard')}>Dashboard</button>
-        <button onClick={() => setActiveTab('incidents')}>Verify Incidents</button>
-        <button onClick={() => setActiveTab('shelters')}>Manage Shelters</button>
-        {/* <button onClick={() => setActiveTab('alerts')}>Emergency Broadcast</button> */}
+      <div
+        style={{
+          marginBottom: '20px',
+          display: 'flex',
+          gap: '10px',
+          flexWrap: 'wrap',
+        }}
+      >
+        <button onClick={() => setActiveTab('dashboard')}>
+          Dashboard
+        </button>
+
+        <button onClick={() => setActiveTab('incidents')}>
+          Verify Incidents
+        </button>
+
+        <button onClick={() => setActiveTab('shelters')}>
+          Manage Shelters
+        </button>
       </div>
 
       <hr />
@@ -283,141 +294,178 @@ export default function AdminDashboard() {
 
       {activeTab === 'incidents' && (
         <div>
-          <h3>Incident Verification and YOLO Image Checks</h3>
+          <h3>Incident Verification and Computer Vision Checks</h3>
 
           {incidents.length === 0 ? (
             <p>No incidents have been reported yet.</p>
           ) : (
-            <table
-              border="1"
-              cellPadding="10"
-              style={{ width: '100%', borderCollapse: 'collapse' }}
-            >
-              <thead>
-                <tr>
-                  <th>Image</th>
-                  <th>Type</th>
-                  <th>Location</th>
-                  <th>Upcount</th>
-                  <th>Community Confidence</th>
-                  <th>YOLO Detection</th>
-                  <th>Confidence</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
+            <div style={{ overflowX: 'auto' }}>
+              <table
+                border="1"
+                cellPadding="10"
+                style={{
+                  width: '100%',
+                  minWidth: '1200px',
+                  borderCollapse: 'collapse',
+                }}
+              >
+                <thead>
+                  <tr>
+                    <th>Image</th>
+                    <th>Type</th>
+                    <th>Location</th>
+                    <th>Reported Date & Time</th>
+                    <th>Upcount</th>
+                    <th>Community Confidence</th>
+                    <th>Computer Vision Result</th>
+                    <th>Confidence</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
 
-              <tbody>
-                {incidents.map((inc) => {
-                  const coords = inc.location?.coordinates || [];
-                  const lat = coords[1] ?? 'N/A';
-                  const lng = coords[0] ?? 'N/A';
+                <tbody>
+                  {incidents.map((incident) => {
+                    const imageUrl = incident.image_url
+                      ? `http://localhost:5000/${incident.image_url}`
+                      : null;
 
-                  const imgUrl = inc.image_url
-                    ? `http://localhost:5000/${inc.image_url}`
-                    : null;
+                    const labels =
+                      incident.cv_verification?.detected_labels || [];
 
-                  const labels = inc.cv_verification?.detected_labels || [];
-const confidence = inc.cv_verification?.confidence_score;
+                    const confidence =
+                      incident.cv_verification?.confidence_score;
 
-const upcount = inc.upcount ?? 1;
-const communityConfidence = inc.community_confidence || 'Low';
+                    const upcount = incident.upcount ?? 1;
 
-                  return (
-                    <tr key={inc._id}>
-                      <td>
-                        {imgUrl ? (
-                          <img
-                            src={imgUrl}
-                            alt="Incident"
-                            width="80"
-                            height="60"
-                            style={{ objectFit: 'cover' }}
-                          />
-                        ) : (
-                          'No Image'
-                        )}
-                      </td>
+                    const communityConfidence =
+                      incident.community_confidence || 'Low';
 
-                      <td>{inc.type || 'N/A'}</td>
+                    return (
+                      <tr key={incident._id}>
+                        <td>
+                          {imageUrl ? (
+                            <img
+                              src={imageUrl}
+                              alt="Incident"
+                              width="80"
+                              height="60"
+                              style={{ objectFit: 'cover' }}
+                            />
+                          ) : (
+                            'No Image'
+                          )}
+                        </td>
 
-                      <td>
-  {lat}, {lng}
-</td>
+                        <td>{incident.type || 'N/A'}</td>
 
-<td>
-  <strong>{upcount}</strong>
-</td>
+                        <td style={{ maxWidth: '260px' }}>
+                          {incident.location_name ||
+                            'Location unavailable'}
+                        </td>
 
-<td>
-  <strong>{communityConfidence}</strong>
+                        <td>
+                          {formatReportedDateTime(
+                            incident.created_at
+                          )}
+                        </td>
 
-  {upcount >= 4 && (
-    <div style={{ marginTop: '4px', fontSize: '12px' }}>
-      High chance confirmed by citizens
-    </div>
-  )}
+                        <td>
+                          <strong>{upcount}</strong>
+                        </td>
 
-  {upcount >= 2 && upcount < 4 && (
-    <div style={{ marginTop: '4px', fontSize: '12px' }}>
-      Multiple citizen reports
-    </div>
-  )}
-</td>
+                        <td>
+                          <strong>{communityConfidence}</strong>
 
-<td>
-  <strong>{inc.cv_verification?.model || 'YOLOv8n'}</strong>
-                        <br />
-                        {labels.length > 0 ? labels.join(', ') : 'No objects detected'}
-                      </td>
-
-                      <td>
-                        {confidence !== undefined
-                          ? `${(confidence * 100).toFixed(1)}%`
-                          : 'N/A'}
-                      </td>
-
-                      <td>{inc.status}</td>
-
-                      <td>
-                        {inc.status === 'PENDING' && (
-                          <>
-                            <button
-                              onClick={() =>
-                                handleVerifyIncident(inc._id, 'VERIFIED')
-                              }
+                          {upcount >= 4 && (
+                            <div
                               style={{
-                                backgroundColor: 'green',
-                                color: 'white',
-                                marginRight: '5px',
-                                padding: '5px 10px',
-                                cursor: 'pointer',
+                                marginTop: '4px',
+                                fontSize: '12px',
                               }}
                             >
-                              Approve
-                            </button>
+                              High chance confirmed by citizens
+                            </div>
+                          )}
 
-                            <button
-                              onClick={() =>
-                                handleVerifyIncident(inc._id, 'REJECTED')
-                              }
+                          {upcount >= 2 && upcount < 4 && (
+                            <div
                               style={{
-                                backgroundColor: 'red',
-                                color: 'white',
-                                padding: '5px 10px',
-                                cursor: 'pointer',
+                                marginTop: '4px',
+                                fontSize: '12px',
                               }}
                             >
-                              Reject
-                            </button>
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                              Multiple citizen reports
+                            </div>
+                          )}
+                        </td>
+
+                        <td>
+                          <strong>
+                            {incident.cv_verification?.model ||
+                              'Computer Vision Classifier'}
+                          </strong>
+                          <br />
+
+                          {labels.length > 0
+                            ? labels.join(', ')
+                            : 'No result available'}
+                        </td>
+
+                        <td>
+                          {confidence !== undefined
+                            ? `${(confidence * 100).toFixed(1)}%`
+                            : 'N/A'}
+                        </td>
+
+                        <td>{incident.status}</td>
+
+                        <td>
+                          {incident.status === 'PENDING' && (
+                            <>
+                              <button
+                                onClick={() =>
+                                  handleVerifyIncident(
+                                    incident._id,
+                                    'VERIFIED'
+                                  )
+                                }
+                                style={{
+                                  backgroundColor: 'green',
+                                  color: 'white',
+                                  marginRight: '5px',
+                                  padding: '5px 10px',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Approve
+                              </button>
+
+                              <button
+                                onClick={() =>
+                                  handleVerifyIncident(
+                                    incident._id,
+                                    'REJECTED'
+                                  )
+                                }
+                                style={{
+                                  backgroundColor: 'red',
+                                  color: 'white',
+                                  padding: '5px 10px',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Reject
+                              </button>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
@@ -426,8 +474,14 @@ const communityConfidence = inc.community_confidence || 'Low';
         <div>
           <h3>Add and Manage Shelters</h3>
 
-          <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '25px' }}>
-            {/* Form Container */}
+          <div
+            style={{
+              display: 'flex',
+              gap: '20px',
+              flexWrap: 'wrap',
+              marginBottom: '25px',
+            }}
+          >
             <form
               onSubmit={handleAddShelter}
               style={{
@@ -440,8 +494,11 @@ const communityConfidence = inc.community_confidence || 'Low';
               <input
                 placeholder="Shelter Name"
                 value={newShelter.name}
-                onChange={(e) =>
-                  setNewShelter({ ...newShelter, name: e.target.value })
+                onChange={(event) =>
+                  setNewShelter({
+                    ...newShelter,
+                    name: event.target.value,
+                  })
                 }
                 required
               />
@@ -451,8 +508,11 @@ const communityConfidence = inc.community_confidence || 'Low';
                 step="any"
                 placeholder="Latitude"
                 value={newShelter.lat}
-                onChange={(e) =>
-                  setNewShelter({ ...newShelter, lat: e.target.value })
+                onChange={(event) =>
+                  setNewShelter({
+                    ...newShelter,
+                    lat: event.target.value,
+                  })
                 }
                 required
               />
@@ -462,8 +522,11 @@ const communityConfidence = inc.community_confidence || 'Low';
                 step="any"
                 placeholder="Longitude"
                 value={newShelter.lng}
-                onChange={(e) =>
-                  setNewShelter({ ...newShelter, lng: e.target.value })
+                onChange={(event) =>
+                  setNewShelter({
+                    ...newShelter,
+                    lng: event.target.value,
+                  })
                 }
                 required
               />
@@ -472,10 +535,10 @@ const communityConfidence = inc.community_confidence || 'Low';
                 placeholder="Total Capacity"
                 type="number"
                 value={newShelter.total_capacity}
-                onChange={(e) =>
+                onChange={(event) =>
                   setNewShelter({
                     ...newShelter,
-                    total_capacity: e.target.value,
+                    total_capacity: event.target.value,
                   })
                 }
                 required
@@ -484,32 +547,63 @@ const communityConfidence = inc.community_confidence || 'Low';
               <input
                 placeholder="Contact Info"
                 value={newShelter.contact}
-                onChange={(e) =>
-                  setNewShelter({ ...newShelter, contact: e.target.value })
+                onChange={(event) =>
+                  setNewShelter({
+                    ...newShelter,
+                    contact: event.target.value,
+                  })
                 }
               />
 
-              <button type="submit" style={{ cursor: 'pointer', padding: '8px' }}>
+              <button
+                type="submit"
+                style={{ cursor: 'pointer', padding: '8px' }}
+              >
                 Add Shelter
               </button>
             </form>
 
-            {/* Map Selection Component */}
-            <div style={{ flex: '1 1 400px', height: '300px', borderRadius: '8px', overflow: 'hidden' }}>
-              <p style={{ margin: '0 0 6px 0', fontSize: '14px', fontWeight: 'bold' }}>
+            <div
+              style={{
+                flex: '1 1 400px',
+                height: '300px',
+                borderRadius: '8px',
+                overflow: 'hidden',
+              }}
+            >
+              <p
+                style={{
+                  margin: '0 0 6px 0',
+                  fontSize: '14px',
+                  fontWeight: 'bold',
+                }}
+              >
                 Click on map to pin coordinates:
               </p>
-              <MapContainer center={[parsedLat, parsedLng]} zoom={5} style={{ height: '100%', width: '100%' }}>
+
+              <MapContainer
+                center={[parsedLat, parsedLng]}
+                zoom={5}
+                style={{ height: '100%', width: '100%' }}
+              >
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+
                 <LocationPicker onLocationSelect={handleMapClick} />
+
                 {newShelter.lat && newShelter.lng && (
-                  <Marker position={[parseFloat(newShelter.lat), parseFloat(newShelter.lng)]} />
+                  <Marker
+                    position={[
+                      parseFloat(newShelter.lat),
+                      parseFloat(newShelter.lng),
+                    ]}
+                  />
                 )}
               </MapContainer>
             </div>
           </div>
 
           <h4>Registered Shelters</h4>
+
           <ul>
             {shelters.map((shelter) => (
               <li key={shelter._id} style={{ marginBottom: '10px' }}>
@@ -518,63 +612,6 @@ const communityConfidence = inc.community_confidence || 'Low';
               </li>
             ))}
           </ul>
-        </div>
-      )}
-
-      {activeTab === 'alerts' && (
-        <div>
-          <h3>Broadcast Emergency Alert</h3>
-
-          <form
-            onSubmit={handleSendAlert}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '10px',
-              maxWidth: '400px',
-            }}
-          >
-            <input
-              placeholder="Target Region (example: Mysuru)"
-              value={alertForm.region}
-              onChange={(e) =>
-                setAlertForm({ ...alertForm, region: e.target.value })
-              }
-              required
-            />
-
-            <select
-              value={alertForm.severity}
-              onChange={(e) =>
-                setAlertForm({ ...alertForm, severity: e.target.value })
-              }
-            >
-              <option value="CRITICAL">Critical</option>
-              <option value="HIGH">High Risk</option>
-              <option value="MODERATE">Moderate Risk</option>
-            </select>
-
-            <textarea
-              placeholder="Alert message for citizens"
-              value={alertForm.message}
-              onChange={(e) =>
-                setAlertForm({ ...alertForm, message: e.target.value })
-              }
-              required
-            />
-
-            <button
-              type="submit"
-              style={{
-                backgroundColor: 'red',
-                color: 'white',
-                padding: '10px',
-                cursor: 'pointer',
-              }}
-            >
-              Broadcast Alert
-            </button>
-          </form>
         </div>
       )}
     </div>

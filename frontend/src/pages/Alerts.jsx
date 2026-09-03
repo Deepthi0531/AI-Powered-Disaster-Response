@@ -1,19 +1,20 @@
 import { useEffect, useState } from 'react';
 import API from '../api/axios';
 
-// Haversine distance helper function (returns distance in km)
 function getDistanceKm(lat1, lon1, lat2, lon2) {
-  const R = 6371;
+  const radius = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
+
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos((lat1 * Math.PI) / 180) *
       Math.cos((lat2 * Math.PI) / 180) *
       Math.sin(dLon / 2) *
       Math.sin(dLon / 2);
+
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+  return radius * c;
 }
 
 export default function Alerts() {
@@ -21,56 +22,64 @@ export default function Alerts() {
   const [nearbyIncidents, setNearbyIncidents] = useState([]);
   const [userLocation, setUserLocation] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [locationStatus, setLocationStatus] = useState('Fetching location...');
+  const [locationStatus, setLocationStatus] = useState(
+    'Fetching your location...'
+  );
 
-  // State for resolving an incident
   const [resolvingId, setResolvingId] = useState(null);
   const [proofFile, setProofFile] = useState(null);
   const [resolvingLoading, setResolvingLoading] = useState(false);
 
-  const BACKEND_BASE_URL = 'http://127.0.0.1:5000';
+  const backendBaseUrl = 'http://127.0.0.1:5000';
 
-  // 1. Fetch Verified Incidents from Backend
   const fetchIncidents = () => {
     setLoading(true);
+
     API.get('/incidents/verified')
-      .then((res) => {
-        setIncidents(res.data.data || []);
+      .then((response) => {
+        setIncidents(response.data.data || []);
       })
-      .catch((err) => {
-        console.error('Failed to load incidents:', err);
+      .catch((error) => {
+        console.error('Failed to load incidents:', error);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+      });
   };
 
   useEffect(() => {
     fetchIncidents();
   }, []);
 
-  // 2. Get User's Geolocation
   useEffect(() => {
     if (!navigator.geolocation) {
-      setLocationStatus('Geolocation is not supported by your browser.');
+      setLocationStatus(
+        'Location is not supported by this browser. Showing all verified incidents.'
+      );
       return;
     }
 
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const coords = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-        };
-        setUserLocation(coords);
-        setLocationStatus(`Showing incidents within 10 km of your location.`);
+      (position) => {
+        setUserLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        });
+
+        setLocationStatus(
+          'Showing verified incidents within 10 km of your location.'
+        );
       },
-      (err) => {
-        console.warn('Geolocation denied or failed:', err);
-        setLocationStatus('Location access denied. Showing all reported incidents.');
+      (error) => {
+        console.warn('Geolocation denied or failed:', error);
+
+        setLocationStatus(
+          'Location access denied. Showing all verified incidents.'
+        );
       }
     );
   }, []);
 
-  // 3. Filter Incidents by Distance when Location or Incidents update
   useEffect(() => {
     if (!incidents.length) {
       setNearbyIncidents([]);
@@ -78,32 +87,38 @@ export default function Alerts() {
     }
 
     if (!userLocation) {
-      // If location is disabled, default to showing all verified incidents
       setNearbyIncidents(incidents);
       return;
     }
 
-    const filtered = incidents
-      .map((inc) => {
-        const coords = inc.location?.coordinates; // Format: [longitude, latitude]
-        if (!coords || coords.length < 2) return null;
+    const filteredIncidents = incidents
+      .map((incident) => {
+        const coordinates = incident.location?.coordinates;
 
-        const distance = getDistanceKm(
+        if (!coordinates || coordinates.length < 2) {
+          return null;
+        }
+
+        const distanceKm = getDistanceKm(
           userLocation.lat,
           userLocation.lng,
-          coords[1], // Latitude
-          coords[0]  // Longitude
+          coordinates[1],
+          coordinates[0]
         );
 
-        return { ...inc, distanceKm: distance };
+        return {
+          ...incident,
+          distanceKm,
+        };
       })
-      .filter((inc) => inc && inc.distanceKm <= 10) // Filter to 10 km radius
-      .sort((a, b) => a.distanceKm - b.distanceKm);
+      .filter(
+        (incident) => incident && incident.distanceKm <= 10
+      )
+      .sort((first, second) => first.distanceKm - second.distanceKm);
 
-    setNearbyIncidents(filtered);
+    setNearbyIncidents(filteredIncidents);
   }, [incidents, userLocation]);
 
-  // 4. Handle Proof Photo Upload & Incident Resolution
   const handleResolveIncident = async (incidentId) => {
     if (!proofFile) {
       alert('Please select a proof image showing the resolved incident.');
@@ -115,46 +130,82 @@ export default function Alerts() {
 
     try {
       setResolvingLoading(true);
-      await API.post(`/incidents/resolve/${incidentId}`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
 
-      alert('Incident successfully resolved and deleted from database!');
+      await API.post(
+        `/incidents/resolve/${incidentId}`,
+        formData,
+        {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        }
+      );
+
+      alert('Incident successfully resolved.');
+
       setResolvingId(null);
       setProofFile(null);
-      
-      // Update state locally to immediately remove resolved card
-      setIncidents((prev) => prev.filter((item) => (item._id || item.id) !== incidentId));
-    } catch (err) {
-      console.error('Failed to resolve incident:', err);
-      alert(err.response?.data?.message || 'Error resolving incident. Please try again.');
+
+      setIncidents((previous) =>
+        previous.filter(
+          (incident) =>
+            (incident._id || incident.id) !== incidentId
+        )
+      );
+    } catch (error) {
+      console.error('Failed to resolve incident:', error);
+
+      alert(
+        error.response?.data?.message ||
+          'Unable to resolve incident. Please try again.'
+      );
     } finally {
       setResolvingLoading(false);
     }
   };
 
-  // Helper function to format timestamp
   const formatDateTime = (rawDate) => {
-    if (!rawDate) return 'Recently';
-    const dateObj = new Date(rawDate);
-    if (isNaN(dateObj.getTime())) return 'Recently';
+    if (!rawDate) {
+      return 'Date unavailable';
+    }
 
-    return `${dateObj.toLocaleDateString('en-IN', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-    })} at ${dateObj.toLocaleTimeString('en-IN', {
-      hour: '2-digit',
-      minute: '2-digit',
+    const date = new Date(rawDate);
+
+    if (Number.isNaN(date.getTime())) {
+      return 'Date unavailable';
+    }
+
+    return date.toLocaleString('en-IN', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
       hour12: true,
-    })}`;
+    });
+  };
+
+  const getBorderColor = (incident) => {
+    if (
+      incident.severity === 'High' ||
+      incident.type?.toLowerCase().includes('flood')
+    ) {
+      return '#ef6a55';
+    }
+
+    if (incident.severity === 'Medium') {
+      return '#e6b84b';
+    }
+
+    return '#2574e8';
   };
 
   return (
-    <div className="dashboard-page" style={{ padding: '2rem', maxWidth: '1000px', margin: '0 auto' }}>
-      {/* Header Banner */}
+    <div
+      className="dashboard-page"
+      style={{
+        padding: '2rem',
+        maxWidth: '1000px',
+        margin: '0 auto',
+      }}
+    >
       <section
         className="dashboard-intro"
         style={{
@@ -165,13 +216,21 @@ export default function Alerts() {
           border: '1px solid #1f2937',
         }}
       >
-        <h1 style={{ color: '#fff', margin: '0.5rem 0' }}>Emergency Alerts</h1>
-        <small style={{ color: '#6b7280', display: 'block', marginTop: '0.5rem' }}>
+        <h1 style={{ color: '#fff', margin: '0.5rem 0' }}>
+          Emergency Alerts
+        </h1>
+
+        <small
+          style={{
+            color: '#9ca3af',
+            display: 'block',
+            marginTop: '0.5rem',
+          }}
+        >
           {locationStatus}
         </small>
       </section>
 
-      {/* Dynamic Nearby Incidents Section */}
       <section
         className="dashboard-section"
         style={{
@@ -182,37 +241,30 @@ export default function Alerts() {
         }}
       >
         <h2 style={{ color: '#fff', marginBottom: '1rem' }}>
-          Nearby Reported Incidents ({nearbyIncidents.length})
+          Nearby Verified Incidents ({nearbyIncidents.length})
         </h2>
 
         {loading ? (
-          <p style={{ color: '#9ca3af' }}>Loading live incident reports...</p>
+          <p style={{ color: '#9ca3af' }}>
+            Loading verified incident reports...
+          </p>
         ) : nearbyIncidents.length === 0 ? (
-          <p style={{ color: '#53b889' }}>No severe incidents reported within 10 km of your current location.</p>
+          <p style={{ color: '#53b889' }}>
+            No verified incidents were found near your location.
+          </p>
         ) : (
           <div style={{ display: 'grid', gap: '1rem' }}>
             {nearbyIncidents.map((incident) => {
               const incidentId = incident._id || incident.id;
-              const borderLeftColor =
-                incident.severity === 'high' || incident.type?.toLowerCase().includes('flood')
-                  ? '#ef6a55'
-                  : incident.severity === 'medium'
-                  ? '#e6b84b'
-                  : '#2574e8';
 
-              // Construct proper image URL
-              let imageSrc = null;
-              if (incident.image_url) {
-                imageSrc = incident.image_url.startsWith('http')
+              const imageSource = incident.image_url
+                ? incident.image_url.startsWith('http')
                   ? incident.image_url
-                  : `${BACKEND_BASE_URL}/${incident.image_url}`;
-              }
+                  : `${backendBaseUrl}/${incident.image_url}`
+                : null;
 
-              // Extract coordinates
-              const coords = incident.location?.coordinates;
-              const locationStr = coords
-                ? `Lat: ${coords[1].toFixed(4)}, Lon: ${coords[0].toFixed(4)}`
-                : incident.address || 'Mysuru District';
+              const locationName =
+                incident.location_name || 'Location unavailable';
 
               return (
                 <div
@@ -221,15 +273,17 @@ export default function Alerts() {
                     backgroundColor: '#1f2937',
                     padding: '1.25rem',
                     borderRadius: '8px',
-                    borderLeft: `5px solid ${borderLeftColor}`,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '1rem',
+                    borderLeft: `5px solid ${getBorderColor(incident)}`,
                   }}
                 >
-                  <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap' }}>
-                    {/* Incident Image Display */}
-                    {imageSrc && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: '1.25rem',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    {imageSource && (
                       <div
                         style={{
                           width: '180px',
@@ -242,71 +296,72 @@ export default function Alerts() {
                         }}
                       >
                         <img
-                          src={imageSrc}
+                          src={imageSource}
                           alt={incident.type || 'Incident'}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                          onError={(e) => {
-                            e.target.style.display = 'none';
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                          }}
+                          onError={(event) => {
+                            event.target.style.display = 'none';
                           }}
                         />
                       </div>
                     )}
 
-                    {/* Incident Main Body */}
                     <div style={{ flex: 1, minWidth: '240px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <h3 style={{ color: '#fff', margin: 0 }}>
-                          {incident.title || incident.type || 'Hazard Report'}
-                        </h3>
-                        {incident.distanceKm !== undefined && (
-                          <span
-                            style={{
-                              backgroundColor: '#374151',
-                              color: '#67d5c7',
-                              padding: '0.2rem 0.6rem',
-                              borderRadius: '4px',
-                              fontSize: '0.85rem',
-                            }}
-                          >
-                            {incident.distanceKm.toFixed(1)} km away
-                          </span>
-                        )}
-                      </div>
-
-                      <p style={{ color: '#d1d5db', margin: '0.5rem 0' }}>
-                        {incident.description || 'Verified citizen incident report near your area.'}
-                      </p>
-
-                      {/* Date, Time, Location & Status Metadata */}
                       <div
                         style={{
-                          display: 'grid',
-                          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-                          gap: '0.5rem',
-                          marginTop: '0.75rem',
-                          fontSize: '0.85rem',
-                          color: '#9ca3af',
-                          borderTop: '1px solid #374151',
-                          paddingTop: '0.5rem',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'flex-start',
+                          gap: '12px',
                         }}
                       >
-                        <div>
-                          <strong style={{ color: '#e5e7eb' }}>📍 Location:</strong> {locationStr}
-                        </div>
-                        <div>
-                          <strong style={{ color: '#e5e7eb' }}>📅 Date & Time:</strong>{' '}
-                          {formatDateTime(incident.created_at || incident.createdAt)}
-                        </div>
-                        <div>
-                          <strong style={{ color: '#e5e7eb' }}>⚡ Status:</strong>{' '}
-                          <span style={{ color: '#f59e0b', fontWeight: '600' }}>Active / Unresolved</span>
-                        </div>
+                        <h3 style={{ color: '#fff', margin: 0 }}>
+                          {incident.type || 'Hazard Report'}
+                        </h3>
+
+                        <small
+                          style={{
+                            color: '#9ca3af',
+                            textAlign: 'right',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          <strong>Reported:</strong>
+                          <br />
+                          {formatDateTime(incident.created_at)}
+                        </small>
+                      </div>
+
+                      <div
+                        style={{
+                          marginTop: '1rem',
+                          paddingTop: '0.7rem',
+                          borderTop: '1px solid #374151',
+                          color: '#9ca3af',
+                          fontSize: '0.9rem',
+                        }}
+                      >
+                        <strong style={{ color: '#e5e7eb' }}>
+                          📍 Location:
+                        </strong>{' '}
+                        {locationName}
                       </div>
                     </div>
                   </div>
 
-                  {/* Citizen Resolution Action Section */}
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #2d3748', paddingTop: '0.75rem' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'flex-end',
+                      borderTop: '1px solid #2d3748',
+                      paddingTop: '0.75rem',
+                      marginTop: '1rem',
+                    }}
+                  >
                     {resolvingId === incidentId ? (
                       <div
                         style={{
@@ -321,16 +376,35 @@ export default function Alerts() {
                           maxWidth: '380px',
                         }}
                       >
-                        <label style={{ color: '#d1d5db', fontSize: '0.85rem', fontWeight: '500' }}>
-                          Upload Proof Photo of Resolved Hazard:
+                        <label
+                          style={{
+                            color: '#d1d5db',
+                            fontSize: '0.85rem',
+                            fontWeight: '500',
+                          }}
+                        >
+                          Upload proof image of the resolved hazard:
                         </label>
+
                         <input
                           type="file"
                           accept="image/*"
-                          onChange={(e) => setProofFile(e.target.files[0])}
-                          style={{ color: '#9ca3af', fontSize: '0.8rem' }}
+                          onChange={(event) =>
+                            setProofFile(event.target.files[0])
+                          }
+                          style={{
+                            color: '#9ca3af',
+                            fontSize: '0.8rem',
+                          }}
                         />
-                        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
+
+                        <div
+                          style={{
+                            display: 'flex',
+                            gap: '0.5rem',
+                            justifyContent: 'flex-end',
+                          }}
+                        >
                           <button
                             onClick={() => {
                               setResolvingId(null);
@@ -343,13 +417,15 @@ export default function Alerts() {
                               border: 'none',
                               borderRadius: '4px',
                               cursor: 'pointer',
-                              fontSize: '0.8rem',
                             }}
                           >
                             Cancel
                           </button>
+
                           <button
-                            onClick={() => handleResolveIncident(incidentId)}
+                            onClick={() =>
+                              handleResolveIncident(incidentId)
+                            }
                             disabled={resolvingLoading}
                             style={{
                               padding: '0.35rem 0.75rem',
@@ -358,11 +434,12 @@ export default function Alerts() {
                               border: 'none',
                               borderRadius: '4px',
                               cursor: 'pointer',
-                              fontSize: '0.8rem',
                               fontWeight: 'bold',
                             }}
                           >
-                            {resolvingLoading ? 'Resolving...' : 'Confirm & Mark Resolved'}
+                            {resolvingLoading
+                              ? 'Resolving...'
+                              : 'Confirm Resolution'}
                           </button>
                         </div>
                       </div>
@@ -377,13 +454,9 @@ export default function Alerts() {
                           borderRadius: '6px',
                           cursor: 'pointer',
                           fontWeight: '600',
-                          fontSize: '0.85rem',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.4rem',
                         }}
                       >
-                        <span>✓</span> Mark as Resolved & Upload Proof
+                        Mark as Resolved & Upload Proof
                       </button>
                     )}
                   </div>
