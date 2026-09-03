@@ -10,6 +10,13 @@ class Config:
     MONGO_URI: str = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
     MONGO_DB_NAME: str = os.getenv("MONGO_DB_NAME", "disaster_response")
 
+    # SQLAlchemy database URI
+    SQLALCHEMY_DATABASE_URI: str = os.getenv(
+        "DATABASE_URL",
+        f"sqlite:///{os.path.join(os.path.dirname(os.path.dirname(__file__)), 'app.db')}",
+    )
+    SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
+
     CORS_ORIGINS: list = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
 
     # Upload folder for incident images
