@@ -1,79 +1,66 @@
+"""Flask application factory."""
+
 import os
-import pickle
 from flask import Flask, send_from_directory
 from flask_cors import CORS
-from dotenv import load_dotenv
-from flask_pymongo import PyMongo
 
-from app.extensions import bcrypt
+from config.settings import get_config
+from app.extensions import bcrypt, init_mongo, mongo, db
+
+# Route imports
+from app.routes.health import health_bp
 from app.routes.auth import auth_bp
-from app.routes.admin_routes import admin_bp
 from app.routes.incident_routes import init_incident_routes
+from app.routes.admin_routes import init_admin_routes
+from app.routes.alert_routes import init_alert_routes
 from app.routes.flood_routes import flood_bp
 from app.routes.shelter_routes import shelter_bp
 
-load_dotenv()
 
-app = Flask(__name__)
-app.url_map.strict_slashes = False
-CORS(app, supports_credentials=True)
+def create_app() -> Flask:
+    """Create and configure the Flask application."""
+    app = Flask(__name__)
 
-bcrypt.init_app(app)
+    cfg = get_config()
+    app.config.from_object(cfg)
 
-app.config['MONGO_URI'] = os.getenv("MONGO_URI", "mongodb://localhost:27017/disaster_guard")
-mongo = PyMongo(app)
-db = mongo.db
+    # Ensure upload directory exists
+    os.makedirs(cfg.UPLOAD_FOLDER, exist_ok=True)
 
-# Store db instance on app.config or attach it so flood_bp can access it cleanly
-app.config['DB'] = db
+    # Initialise CORS across all endpoints including static assets
+    CORS(
+        app,
+        resources={r"/*": {"origins": cfg.CORS_ORIGINS}},
+        supports_credentials=True,
+    )
 
-# --- ML MODEL INTEGRATION ---
-MODELS_DIR = os.path.join(os.path.dirname(__file__), 'models')
-MODEL_PATH = os.path.join(MODELS_DIR, 'flood_risk_xgb_model.pkl')
-PREPROCESSOR_PATH = os.path.join(MODELS_DIR, 'flood_risk_preprocessor.pkl')
+    # Serve static uploaded files for frontend/maps across both /uploads and /api/uploads
+    @app.route("/uploads/<path:filename>")
+    @app.route("/api/uploads/<path:filename>")
+    def serve_upload(filename):
+        return send_from_directory(cfg.UPLOAD_FOLDER, filename)
 
-ml_model = None
-preprocessor = None
+    # Initialise extensions
+    bcrypt.init_app(app)
+    db.init_app(app)
+    init_mongo(app)
 
-try:
-    if os.path.exists(MODEL_PATH):
-        with open(MODEL_PATH, 'rb') as f:
-            ml_model = pickle.load(f)
-        print("XGBoost model loaded successfully.")
-    else:
-        print(f"Warning: Model file not found at {MODEL_PATH}")
-except Exception as e:
-    print(f"Error loading ML model: {e}")
+    # Initialise collections, indexes, and database tables inside app context
+    with app.app_context():
+        db.create_all()
 
-try:
-    if os.path.exists(PREPROCESSOR_PATH):
-        with open(PREPROCESSOR_PATH, 'rb') as f:
-            preprocessor = pickle.load(f)
-        print("Preprocessor loaded successfully.")
-    else:
-        print(f"Warning: Preprocessor file not found at {PREPROCESSOR_PATH}")
-except Exception as e:
-    print(f"Warning: Preprocessor failed to load ({e}). System will fall back to raw input array.")
-    preprocessor = None
-# ----------------------------
+        # Register Incident, Admin & Alert Blueprints
+        incident_bp = init_incident_routes(mongo.db)
+        admin_bp = init_admin_routes(mongo.db)
+        alert_bp = init_alert_routes(mongo.db)
 
-UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    # Register standard blueprints under /api prefix
+    app.register_blueprint(health_bp)
+    app.register_blueprint(auth_bp, url_prefix="/api")
+    app.register_blueprint(flood_bp, url_prefix="/api")
+    app.register_blueprint(incident_bp, url_prefix="/api")
+    app.register_blueprint(admin_bp, url_prefix="/api")
+    app.register_blueprint(alert_bp, url_prefix="/api")
+    app.register_blueprint(shelter_bp, url_prefix="/api")
 
-@app.route('/uploads/<path:filename>')
-def serve_uploads(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
-# Initialize Blueprints
-incident_bp = init_incident_routes(db)
-
-# Register Blueprints
-app.register_blueprint(auth_bp, url_prefix='/api')
-app.register_blueprint(admin_bp, url_prefix='/api')
-app.register_blueprint(incident_bp, url_prefix='/api')
-app.register_blueprint(flood_bp, url_prefix='/api')
-from app.routes.shelter_routes import shelter_bp
-
-if __name__ == "__main__":
-    app.run(debug=True, port=5000, use_reloader=False)
+    return app

@@ -1,7 +1,8 @@
 import os
+import uuid
 from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
-from app.models import Shelter  # Imports your MongoEngine Shelter model
+from app.models import Shelter  # Imports MongoEngine Shelter model
 
 shelter_bp = Blueprint('shelter_bp', __name__)
 
@@ -39,20 +40,25 @@ def report_shelter():
         if 'image' in request.files:
             file = request.files['image']
             if file and file.filename != '' and allowed_file(file.filename):
-                filename = secure_filename(file.filename)
-                upload_folder = os.path.join(current_app.root_path, 'static', 'uploads')
+                original_filename = secure_filename(file.filename)
+                filename = f"shelter_{uuid.uuid4().hex}_{original_filename}"
+                upload_folder = current_app.config.get('UPLOAD_FOLDER', os.path.join(current_app.root_path, '..', 'uploads'))
                 os.makedirs(upload_folder, exist_ok=True)
                 
                 save_path = os.path.join(upload_folder, filename)
                 file.save(save_path)
-                image_url = f"/static/uploads/{filename}"
+                image_url = f"uploads/{filename}"
 
-        # Instantiating MongoEngine document
+        # Instantiating MongoEngine document with both root coordinates & GeoJSON location
         new_shelter = Shelter(
             name=name.strip(),
             location_name=location_name.strip(),
             latitude=latitude,
             longitude=longitude,
+            location={
+                "type": "Point",
+                "coordinates": [longitude, latitude]
+            },
             total_beds=total_beds,
             available_beds=available_beds,
             facilities=facilities.strip(),
