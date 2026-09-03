@@ -1,3 +1,7 @@
 node_modules/
 dist/
 .vite/
+
+# Python cache files
+__pycache__/
+*.py[cod]
