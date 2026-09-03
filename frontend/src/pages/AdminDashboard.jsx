@@ -18,9 +18,12 @@ const cardStyle = {
 // Fix Leaflet marker icon rendering issues in React
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconRetinaUrl:
+    'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl:
+    'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl:
+    'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
 // Interactive map click handler
@@ -240,15 +243,34 @@ export default function AdminDashboard() {
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
       <h2>Admin Control Tower</h2>
+
       <p style={{ marginTop: '8px' }}>
         Welcome back, {user?.username || user?.name || 'Admin'}.
       </p>
 
-      <div style={{ marginBottom: '20px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-        <button onClick={() => setActiveTab('dashboard')}>Dashboard</button>
-        <button onClick={() => setActiveTab('incidents')}>Verify Incidents</button>
-        <button onClick={() => setActiveTab('shelters')}>Manage Shelters</button>
-        <button onClick={() => setActiveTab('alerts')}>Emergency Broadcast</button>
+      <div
+        style={{
+          marginBottom: '20px',
+          display: 'flex',
+          gap: '10px',
+          flexWrap: 'wrap',
+        }}
+      >
+        <button onClick={() => setActiveTab('dashboard')}>
+          Dashboard
+        </button>
+
+        <button onClick={() => setActiveTab('incidents')}>
+          Verify Incidents
+        </button>
+
+        <button onClick={() => setActiveTab('shelters')}>
+          Manage Shelters
+        </button>
+
+        <button onClick={() => setActiveTab('alerts')}>
+          Emergency Broadcast
+        </button>
       </div>
 
       <hr />
@@ -288,111 +310,178 @@ export default function AdminDashboard() {
           {incidents.length === 0 ? (
             <p>No incidents have been reported yet.</p>
           ) : (
-            <table
-              border="1"
-              cellPadding="10"
-              style={{ width: '100%', borderCollapse: 'collapse' }}
-            >
-              <thead>
-                <tr>
-                  <th>Image</th>
-                  <th>Type</th>
-                  <th>Location</th>
-                  <th>YOLO Detection</th>
-                  <th>Confidence</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
+            <div style={{ overflowX: 'auto' }}>
+              <table
+                border="1"
+                cellPadding="10"
+                style={{
+                  width: '100%',
+                  borderCollapse: 'collapse',
+                  minWidth: '1100px',
+                }}
+              >
+                <thead>
+                  <tr>
+                    <th>Image</th>
+                    <th>Type</th>
+                    <th>Location</th>
 
-              <tbody>
-                {incidents.map((inc) => {
-                  const coords = inc.location?.coordinates || [];
-                  const lat = coords[1] ?? 'N/A';
-                  const lng = coords[0] ?? 'N/A';
+                    {/* NEW */}
+                    <th>Upcount</th>
 
-                  const imgUrl = inc.image_url
-                    ? `http://localhost:5000/${inc.image_url}`
-                    : null;
+                    {/* NEW */}
+                    <th>Community Confidence</th>
 
-                  const labels = inc.cv_verification?.detected_labels || [];
-                  const confidence = inc.cv_verification?.confidence_score;
+                    <th>YOLO Detection</th>
+                    <th>AI Confidence</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
 
-                  return (
-                    <tr key={inc._id}>
-                      <td>
-                        {imgUrl ? (
-                          <img
-                            src={imgUrl}
-                            alt="Incident"
-                            width="80"
-                            height="60"
-                            style={{ objectFit: 'cover' }}
-                          />
-                        ) : (
-                          'No Image'
-                        )}
-                      </td>
+                <tbody>
+                  {incidents.map((inc) => {
+                    const coords = inc.location?.coordinates || [];
 
-                      <td>{inc.type || 'N/A'}</td>
+                    const lat = coords[1] ?? 'N/A';
+                    const lng = coords[0] ?? 'N/A';
 
-                      <td>
-                        {lat}, {lng}
-                      </td>
+                    const imgUrl = inc.image_url
+                      ? `http://localhost:5000/${inc.image_url}`
+                      : null;
 
-                      <td>
-                        <strong>{inc.cv_verification?.model || 'YOLOv8n'}</strong>
-                        <br />
-                        {labels.length > 0 ? labels.join(', ') : 'No objects detected'}
-                      </td>
+                    const labels =
+                      inc.cv_verification?.detected_labels || [];
 
-                      <td>
-                        {confidence !== undefined
-                          ? `${(confidence * 100).toFixed(1)}%`
-                          : 'N/A'}
-                      </td>
+                    const confidence =
+                      inc.cv_verification?.confidence_score;
 
-                      <td>{inc.status}</td>
+                    const upcount = inc.upcount ?? 1;
 
-                      <td>
-                        {inc.status === 'PENDING' && (
-                          <>
-                            <button
-                              onClick={() =>
-                                handleVerifyIncident(inc._id, 'VERIFIED')
-                              }
+                    const communityConfidence =
+                      inc.community_confidence || 'Low';
+
+                    return (
+                      <tr key={inc._id}>
+                        <td>
+                          {imgUrl ? (
+                            <img
+                              src={imgUrl}
+                              alt="Incident"
+                              width="80"
+                              height="60"
+                              style={{ objectFit: 'cover' }}
+                            />
+                          ) : (
+                            'No Image'
+                          )}
+                        </td>
+
+                        <td>{inc.type || 'N/A'}</td>
+
+                        <td>
+                          {lat}, {lng}
+                        </td>
+
+                        {/* NEW: UPCOUNT */}
+                        <td>
+                          <strong>{upcount}</strong>
+                        </td>
+
+                        {/* NEW: COMMUNITY CONFIDENCE */}
+                        <td>
+                          <strong>{communityConfidence}</strong>
+
+                          {upcount >= 4 && (
+                            <div
                               style={{
-                                backgroundColor: 'green',
-                                color: 'white',
-                                marginRight: '5px',
-                                padding: '5px 10px',
-                                cursor: 'pointer',
+                                marginTop: '4px',
+                                fontSize: '12px',
                               }}
                             >
-                              Approve
-                            </button>
+                              High chance confirmed by citizens
+                            </div>
+                          )}
 
-                            <button
-                              onClick={() =>
-                                handleVerifyIncident(inc._id, 'REJECTED')
-                              }
+                          {upcount >= 2 && upcount < 4 && (
+                            <div
                               style={{
-                                backgroundColor: 'red',
-                                color: 'white',
-                                padding: '5px 10px',
-                                cursor: 'pointer',
+                                marginTop: '4px',
+                                fontSize: '12px',
                               }}
                             >
-                              Reject
-                            </button>
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                              Multiple citizen reports
+                            </div>
+                          )}
+                        </td>
+
+                        <td>
+                          <strong>
+                            {inc.cv_verification?.model || 'YOLOv8n'}
+                          </strong>
+
+                          <br />
+
+                          {labels.length > 0
+                            ? labels.join(', ')
+                            : 'No objects detected'}
+                        </td>
+
+                        {/* AI/CV CONFIDENCE */}
+                        <td>
+                          {confidence !== undefined
+                            ? `${(confidence * 100).toFixed(1)}%`
+                            : 'N/A'}
+                        </td>
+
+                        <td>{inc.status}</td>
+
+                        <td>
+                          {inc.status === 'PENDING' && (
+                            <>
+                              <button
+                                onClick={() =>
+                                  handleVerifyIncident(
+                                    inc._id,
+                                    'VERIFIED'
+                                  )
+                                }
+                                style={{
+                                  backgroundColor: 'green',
+                                  color: 'white',
+                                  marginRight: '5px',
+                                  padding: '5px 10px',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Approve
+                              </button>
+
+                              <button
+                                onClick={() =>
+                                  handleVerifyIncident(
+                                    inc._id,
+                                    'REJECTED'
+                                  )
+                                }
+                                style={{
+                                  backgroundColor: 'red',
+                                  color: 'white',
+                                  padding: '5px 10px',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Reject
+                              </button>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
@@ -401,8 +490,14 @@ export default function AdminDashboard() {
         <div>
           <h3>Add and Manage Shelters</h3>
 
-          <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '25px' }}>
-            {/* Form Container */}
+          <div
+            style={{
+              display: 'flex',
+              gap: '20px',
+              flexWrap: 'wrap',
+              marginBottom: '25px',
+            }}
+          >
             <form
               onSubmit={handleAddShelter}
               style={{
@@ -416,7 +511,10 @@ export default function AdminDashboard() {
                 placeholder="Shelter Name"
                 value={newShelter.name}
                 onChange={(e) =>
-                  setNewShelter({ ...newShelter, name: e.target.value })
+                  setNewShelter({
+                    ...newShelter,
+                    name: e.target.value,
+                  })
                 }
                 required
               />
@@ -427,7 +525,10 @@ export default function AdminDashboard() {
                 placeholder="Latitude"
                 value={newShelter.lat}
                 onChange={(e) =>
-                  setNewShelter({ ...newShelter, lat: e.target.value })
+                  setNewShelter({
+                    ...newShelter,
+                    lat: e.target.value,
+                  })
                 }
                 required
               />
@@ -438,7 +539,10 @@ export default function AdminDashboard() {
                 placeholder="Longitude"
                 value={newShelter.lng}
                 onChange={(e) =>
-                  setNewShelter({ ...newShelter, lng: e.target.value })
+                  setNewShelter({
+                    ...newShelter,
+                    lng: e.target.value,
+                  })
                 }
                 required
               />
@@ -460,34 +564,76 @@ export default function AdminDashboard() {
                 placeholder="Contact Info"
                 value={newShelter.contact}
                 onChange={(e) =>
-                  setNewShelter({ ...newShelter, contact: e.target.value })
+                  setNewShelter({
+                    ...newShelter,
+                    contact: e.target.value,
+                  })
                 }
               />
 
-              <button type="submit" style={{ cursor: 'pointer', padding: '8px' }}>
+              <button
+                type="submit"
+                style={{
+                  cursor: 'pointer',
+                  padding: '8px',
+                }}
+              >
                 Add Shelter
               </button>
             </form>
 
-            {/* Map Selection Component */}
-            <div style={{ flex: '1 1 400px', height: '300px', borderRadius: '8px', overflow: 'hidden' }}>
-              <p style={{ margin: '0 0 6px 0', fontSize: '14px', fontWeight: 'bold' }}>
+            <div
+              style={{
+                flex: '1 1 400px',
+                height: '300px',
+                borderRadius: '8px',
+                overflow: 'hidden',
+              }}
+            >
+              <p
+                style={{
+                  margin: '0 0 6px 0',
+                  fontSize: '14px',
+                  fontWeight: 'bold',
+                }}
+              >
                 Click on map to pin coordinates:
               </p>
-              <MapContainer center={[parsedLat, parsedLng]} zoom={5} style={{ height: '100%', width: '100%' }}>
+
+              <MapContainer
+                center={[parsedLat, parsedLng]}
+                zoom={5}
+                style={{
+                  height: '100%',
+                  width: '100%',
+                }}
+              >
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                <LocationPicker onLocationSelect={handleMapClick} />
+
+                <LocationPicker
+                  onLocationSelect={handleMapClick}
+                />
+
                 {newShelter.lat && newShelter.lng && (
-                  <Marker position={[parseFloat(newShelter.lat), parseFloat(newShelter.lng)]} />
+                  <Marker
+                    position={[
+                      parseFloat(newShelter.lat),
+                      parseFloat(newShelter.lng),
+                    ]}
+                  />
                 )}
               </MapContainer>
             </div>
           </div>
 
           <h4>Registered Shelters</h4>
+
           <ul>
             {shelters.map((shelter) => (
-              <li key={shelter._id} style={{ marginBottom: '10px' }}>
+              <li
+                key={shelter._id}
+                style={{ marginBottom: '10px' }}
+              >
                 <strong>{shelter.name}</strong> — Capacity:{' '}
                 {shelter.total_capacity} beds
               </li>
@@ -513,7 +659,10 @@ export default function AdminDashboard() {
               placeholder="Target Region (example: Mysuru)"
               value={alertForm.region}
               onChange={(e) =>
-                setAlertForm({ ...alertForm, region: e.target.value })
+                setAlertForm({
+                  ...alertForm,
+                  region: e.target.value,
+                })
               }
               required
             />
@@ -521,7 +670,10 @@ export default function AdminDashboard() {
             <select
               value={alertForm.severity}
               onChange={(e) =>
-                setAlertForm({ ...alertForm, severity: e.target.value })
+                setAlertForm({
+                  ...alertForm,
+                  severity: e.target.value,
+                })
               }
             >
               <option value="CRITICAL">Critical</option>
@@ -533,7 +685,10 @@ export default function AdminDashboard() {
               placeholder="Alert message for citizens"
               value={alertForm.message}
               onChange={(e) =>
-                setAlertForm({ ...alertForm, message: e.target.value })
+                setAlertForm({
+                  ...alertForm,
+                  message: e.target.value,
+                })
               }
               required
             />

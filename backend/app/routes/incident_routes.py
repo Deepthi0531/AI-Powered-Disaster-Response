@@ -1,5 +1,6 @@
 import os
 import uuid
+import math
 from datetime import datetime
 
 from flask import Blueprint, request, jsonify
@@ -18,6 +19,9 @@ UPLOAD_FOLDER = os.path.join(
 
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
+# Two reports within this distance are considered the same incident.
+INCIDENT_MATCH_RADIUS_METERS = 10
+
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
@@ -26,6 +30,31 @@ def allowed_file(filename):
         "." in filename
         and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
     )
+
+
+def calculate_distance_meters(lat1, lon1, lat2, lon2):
+    """
+    Calculate the geographical distance between two coordinates
+    using the Haversine formula.
+    """
+    earth_radius = 6371000  # meters
+
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+
+    delta_lat = math.radians(lat2 - lat1)
+    delta_lon = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1_rad)
+        * math.cos(lat2_rad)
+        * math.sin(delta_lon / 2) ** 2
+    )
+
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    return earth_radius * c
 
 
 def init_incident_routes(db):
@@ -143,6 +172,114 @@ def init_incident_routes(db):
         incident_status = "PENDING"
         cv_result["status"] = "pending_review"
 
+        # ---------------------------------------------------------
+        # DUPLICATE INCIDENT DETECTION
+        # ---------------------------------------------------------
+        #
+        # Check existing incidents of the same type that are not
+        # rejected. If one is within 10 meters, treat this report
+        # as another confirmation of the same incident.
+        # ---------------------------------------------------------
+
+        existing_incidents = db.incidents.find({
+            "type": incident_type,
+            "status": {"$in": ["PENDING", "VERIFIED"]}
+        })
+
+        matching_incident = None
+        matching_distance = None
+
+        for existing in existing_incidents:
+            existing_coordinates = (
+                existing.get("location", {}).get("coordinates", [])
+            )
+
+            if len(existing_coordinates) != 2:
+                continue
+
+            existing_longitude = existing_coordinates[0]
+            existing_latitude = existing_coordinates[1]
+
+            try:
+                distance = calculate_distance_meters(
+                    latitude,
+                    longitude,
+                    float(existing_latitude),
+                    float(existing_longitude)
+                )
+            except (TypeError, ValueError):
+                continue
+
+            if distance <= INCIDENT_MATCH_RADIUS_METERS:
+                matching_incident = existing
+                matching_distance = distance
+                break
+
+        # ---------------------------------------------------------
+        # EXISTING INCIDENT FOUND
+        # ---------------------------------------------------------
+        if matching_incident:
+            current_upcount = matching_incident.get("upcount", 1)
+
+            try:
+                current_upcount = int(current_upcount)
+            except (TypeError, ValueError):
+                current_upcount = 1
+
+            new_upcount = current_upcount + 1
+
+            # Community confidence is based on the number of
+            # citizen reports confirming the same incident.
+            if new_upcount >= 4:
+                community_confidence = "High"
+            elif new_upcount >= 2:
+                community_confidence = "Medium"
+            else:
+                community_confidence = "Low"
+
+            update_data = {
+                "$set": {
+                    "upcount": new_upcount,
+                    "community_confidence": community_confidence,
+                    "updated_at": datetime.utcnow()
+                }
+            }
+
+            db.incidents.update_one(
+                {"_id": matching_incident["_id"]},
+                update_data
+            )
+
+            # The uploaded image belongs to a duplicate report and
+            # is not needed as a separate incident image.
+            if os.path.exists(filepath):
+                os.remove(filepath)
+
+            return jsonify({
+                "status": "success",
+                "message": (
+                    "Your report matched an existing incident. "
+                    "The incident confirmation count has been increased."
+                ),
+                "incident_id": str(matching_incident["_id"]),
+                "duplicate": True,
+                "upcount": new_upcount,
+                "community_confidence": community_confidence,
+                "matching_distance_meters": round(matching_distance, 2),
+                "verification": {
+                    "cv": cv_result,
+                    "weather": weather_result,
+                    "overall_status": matching_incident.get(
+                        "status",
+                        "PENDING"
+                    )
+                }
+            }), 200
+
+        # ---------------------------------------------------------
+        # NEW INCIDENT
+        # ---------------------------------------------------------
+
         incident_doc = {
             "reporter_id": reporter_id,
             "type": incident_type,
@@ -161,9 +298,18 @@ def init_incident_routes(db):
             },
             "cv_verification": {
                 "status": cv_result.get("status", "pending_review"),
-                "confidence_score": cv_result.get("confidence_score", 0.0),
-                "detected_labels": cv_result.get("detected_labels", []),
-                "detections": cv_result.get("detections", []),
+                "confidence_score": cv_result.get(
+                    "confidence_score",
+                    0.0
+                ),
+                "detected_labels": cv_result.get(
+                    "detected_labels",
+                    []
+                ),
+                "detections": cv_result.get(
+                    "detections",
+                    []
+                ),
                 "model": cv_result.get(
                     "model",
                     "CLIP Zero-Shot Incident Classifier"
@@ -172,6 +318,13 @@ def init_incident_routes(db):
             },
             "weather_verification": weather_result,
             "overall_confidence": "Pending admin review",
+
+            # New incident starts with one citizen report.
+            "upcount": 1,
+
+            # Community confidence starts at Low.
+            "community_confidence": "Low",
+
             "status": incident_status,
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow()
@@ -186,6 +339,9 @@ def init_incident_routes(db):
                 "AI prediction is saved and awaiting admin review."
             ),
             "incident_id": str(inserted_id),
+            "duplicate": False,
+            "upcount": 1,
+            "community_confidence": "Low",
             "verification": {
                 "cv": cv_result,
                 "weather": weather_result,
