@@ -298,6 +298,8 @@ export default function AdminDashboard() {
                   <th>Image</th>
                   <th>Type</th>
                   <th>Location</th>
+                  <th>Upcount</th>
+                  <th>Community Confidence</th>
                   <th>YOLO Detection</th>
                   <th>Confidence</th>
                   <th>Status</th>
@@ -316,7 +318,10 @@ export default function AdminDashboard() {
                     : null;
 
                   const labels = inc.cv_verification?.detected_labels || [];
-                  const confidence = inc.cv_verification?.confidence_score;
+const confidence = inc.cv_verification?.confidence_score;
+
+const upcount = inc.upcount ?? 1;
+const communityConfidence = inc.community_confidence || 'Low';
 
                   return (
                     <tr key={inc._id}>
@@ -337,11 +342,31 @@ export default function AdminDashboard() {
                       <td>{inc.type || 'N/A'}</td>
 
                       <td>
-                        {lat}, {lng}
-                      </td>
+  {lat}, {lng}
+</td>
 
-                      <td>
-                        <strong>{inc.cv_verification?.model || 'YOLOv8n'}</strong>
+<td>
+  <strong>{upcount}</strong>
+</td>
+
+<td>
+  <strong>{communityConfidence}</strong>
+
+  {upcount >= 4 && (
+    <div style={{ marginTop: '4px', fontSize: '12px' }}>
+      High chance confirmed by citizens
+    </div>
+  )}
+
+  {upcount >= 2 && upcount < 4 && (
+    <div style={{ marginTop: '4px', fontSize: '12px' }}>
+      Multiple citizen reports
+    </div>
+  )}
+</td>
+
+<td>
+  <strong>{inc.cv_verification?.model || 'YOLOv8n'}</strong>
                         <br />
                         {labels.length > 0 ? labels.join(', ') : 'No objects detected'}
                       </td>

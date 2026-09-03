@@ -1,5 +1,6 @@
 import os
 import uuid
+import math
 from datetime import datetime
 
 from bson.objectid import ObjectId
@@ -16,6 +17,10 @@ UPLOAD_FOLDER = os.path.join(
 
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
+# Maximum distance for considering two citizen reports
+# to be the same incident.
+INCIDENT_MATCH_RADIUS_METERS = 10
+
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
@@ -24,6 +29,45 @@ def allowed_file(filename):
         "." in filename
         and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
     )
+
+
+def calculate_distance_meters(lat1, lon1, lat2, lon2):
+    """
+    Calculate distance between two latitude/longitude points
+    using the Haversine formula.
+    """
+
+    earth_radius = 6371000  # meters
+
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+
+    delta_lat = math.radians(lat2 - lat1)
+    delta_lon = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1_rad)
+        * math.cos(lat2_rad)
+        * math.sin(delta_lon / 2) ** 2
+    )
+
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    return earth_radius * c
+
+
+def get_community_confidence(upcount):
+    """
+    Community confidence based on number of citizen reports.
+    """
+
+    if upcount >= 4:
+        return "High"
+    elif upcount >= 2:
+        return "Medium"
+    else:
+        return "Low"
 
 
 def init_incident_routes(db):
@@ -173,6 +217,97 @@ def init_incident_routes(db):
         incident_status = "PENDING"
         cv_result["status"] = "pending_review"
 
+        # ---------------------------------------------------------------------
+        # CHECK FOR EXISTING INCIDENT
+        # ---------------------------------------------------------------------
+        #
+        # If another citizen has already reported the same incident type
+        # within 10 meters, increase the existing incident's upcount instead
+        # of creating a duplicate incident.
+        #
+        # Rejected incidents are intentionally excluded.
+        # ---------------------------------------------------------------------
+
+        existing_incidents = db.incidents.find({
+            "type": incident_type,
+            "status": {
+                "$in": ["PENDING", "VERIFIED"]
+            }
+        })
+
+        for existing_incident in existing_incidents:
+            existing_location = existing_incident.get("location", {})
+            existing_coordinates = existing_location.get("coordinates", [])
+
+            if len(existing_coordinates) != 2:
+                continue
+
+            # GeoJSON coordinates are stored as:
+            # [longitude, latitude]
+            existing_longitude = existing_coordinates[0]
+            existing_latitude = existing_coordinates[1]
+
+            distance = calculate_distance_meters(
+                latitude,
+                longitude,
+                existing_latitude,
+                existing_longitude
+            )
+
+            if distance <= INCIDENT_MATCH_RADIUS_METERS:
+
+                current_upcount = existing_incident.get("upcount", 1)
+                new_upcount = current_upcount + 1
+
+                community_confidence = get_community_confidence(
+                    new_upcount
+                )
+
+                updated_at = datetime.utcnow()
+
+                db.incidents.update_one(
+                    {"_id": existing_incident["_id"]},
+                    {
+                        "$set": {
+                            "upcount": new_upcount,
+                            "community_confidence": community_confidence,
+                            "updated_at": updated_at,
+                        }
+                    }
+                )
+
+                # The uploaded image is a duplicate report, so it does not
+                # need to remain on disk.
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+
+                return (
+                    jsonify({
+                        "status": "success",
+                        "message": (
+                            "This incident has already been reported nearby. "
+                            "Your report has been counted as a confirmation."
+                        ),
+                        "incident_id": str(existing_incident["_id"]),
+                        "duplicate": True,
+                        "upcount": new_upcount,
+                        "community_confidence": community_confidence,
+                        "matching_distance_meters": round(distance, 2),
+                        "verification": {
+                            "cv": cv_result,
+                            "weather": weather_result,
+                            "overall_status": existing_incident.get(
+                                "status", "PENDING"
+                            ),
+                        },
+                    }),
+                    200,
+                )
+
+        # ---------------------------------------------------------------------
+        # CREATE NEW INCIDENT
+        # ---------------------------------------------------------------------
+
         incident_doc = {
             "reporter_id": reporter_id,
             "type": incident_type,
@@ -202,6 +337,11 @@ def init_incident_routes(db):
             "weather_verification": weather_result,
             "overall_confidence": "Pending admin review",
             "status": incident_status,
+
+            # Community confirmation fields
+            "upcount": 1,
+            "community_confidence": "Low",
+
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
         }
@@ -292,7 +432,7 @@ def init_incident_routes(db):
             return (
                 jsonify({
                     "status": "success",
-                    "message": "Incident resolved successfully with proof photo and deleted from database.",
+                    "message": "Incident resolved successfully with proof photo and deleted fromdatabase.",
                     "proof_url": f"uploads/{filename}",
                 }),
                 200,
