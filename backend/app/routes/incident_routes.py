@@ -17,7 +17,7 @@ UPLOAD_FOLDER = os.path.join(
 )
 
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
-INCIDENT_MATCH_RADIUS_METERS = 10
+INCIDENT_MATCH_RADIUS_METERS = 100
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
