@@ -44,11 +44,13 @@ Make sure you have the following installed on your system:
 ### 📥 Installation & Setup
 
 #### 1. Clone the Repository
-```bash
 git clone [https://github.com/your-username/AI-Disaster-Response.git](https://github.com/your-username/AI-Disaster-Response.git)
 cd AI-Disaster-Response
 
-2. Backend Setup
+
+
+#### 2. Backend Setup
+
 # Navigate to backend directory
 cd backend
 
@@ -69,7 +71,10 @@ pip install -r requirements.txt
 # Run the backend server
 python run.py
 
-3. Frontend Setup
+*Backend server runs on `http://127.0.0.1:5000` by default.*
+
+#### 3. Frontend Setup
+
 # Navigate to frontend directory (from project root)
 cd frontend
 
@@ -79,7 +84,13 @@ npm install
 # Start development server
 npm run dev
 
-📂 Project Structure
+
+*Frontend runs on `http://localhost:5173` by default.*
+
+---
+
+## 📂 Project Structure
+
 AI-Disaster-Response/
 ├── backend/
 │   ├── app/
@@ -97,3 +108,26 @@ AI-Disaster-Response/
 │   └── package.json
 ├── .gitignore
 └── README.md
+
+
+---
+
+## 📡 Key API Endpoints
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `GET` | `/incidents/verified` | Fetch all verified active emergency reports |
+| `POST` | `/incidents/report` | Submit a new hazard report with an image |
+| `POST` | `/incidents/resolve/:id` | Mark an incident resolved by uploading a proof photo |
+
+---
+
+## ⚙️ Troubleshooting Git Conflicts
+
+If you encounter Git merge conflicts involving Python cache files (`__pycache__`), run:
+
+git rm -r --cached **/ __pycache__
+git add .
+git commit -m "Clean up pycache and resolve merge conflicts"
+
+

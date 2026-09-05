@@ -235,7 +235,8 @@ function LiveMap({ activeLayer, incidents, shelters, selectedShelter, onShelterS
     };
   }, [activeLayer, incidents, shelters, selectedShelter, onShelterSelect]);
 
-  return <div ref={mapElement} className="leaflet-map" style={{ height: '450px', width: '100%', borderRadius: '8px' }} />;
+  // Height increased by 1 inch (~96px) from 450px to 546px
+  return <div ref={mapElement} className="leaflet-map" style={{ height: '546px', width: '100%', borderRadius: '8px' }} />;
 }
 
 export default function Dashboard() {
@@ -251,6 +252,10 @@ export default function Dashboard() {
   const [isCalculatingRoute, setIsCalculatingRoute] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
+  // Search state for custom destination city/trip location
+  const [destinationSearch, setDestinationSearch] = useState('');
+  const [isSearchingDestination, setIsSearchingDestination] = useState(false);
+
   const activeAbortController = useRef(null);
   const lastFetchedCoords = useRef({ lat: null, lng: null });
 
@@ -264,117 +269,161 @@ export default function Dashboard() {
       .catch((err) => console.error('Error loading verified incidents:', err));
   }, []);
 
- // Dynamic geometry hazard check with local street buffer (0.3 km)
-const checkRouteHasHazards = (geometryCoordinates, hazardsList) => {
-  let breachCount = 0;
-  let minDistanceToHazard = Infinity;
+  // Dynamic geometry hazard check with local street buffer (0.3 km)
+  const checkRouteHasHazards = (geometryCoordinates, hazardsList) => {
+    let breachCount = 0;
+    let minDistanceToHazard = Infinity;
 
-  for (let coord of geometryCoordinates) {
-    const routeLng = coord[0];
-    const routeLat = coord[1];
+    for (let coord of geometryCoordinates) {
+      const routeLng = coord[0];
+      const routeLat = coord[1];
 
-    for (let hazard of hazardsList) {
-      const dist = parseFloat(calculateDistance(routeLat, routeLng, hazard.lat, hazard.lng));
-      
-      if (dist < minDistanceToHazard) {
-        minDistanceToHazard = dist;
-      }
+      for (let hazard of hazardsList) {
+        const dist = parseFloat(calculateDistance(routeLat, routeLng, hazard.lat, hazard.lng));
+        
+        if (dist < minDistanceToHazard) {
+          minDistanceToHazard = dist;
+        }
 
-      // Localized street buffer: 300 meters (0.3 km)
-      if (dist < 0.3) {
-        breachCount++;
+        // Localized street buffer: 300 meters (0.3 km)
+        if (dist < 0.3) {
+          breachCount++;
+        }
       }
     }
-  }
 
-  return {
-    hasConflict: breachCount > 0,
-    breachCount,
-    minDistanceToHazard,
+    return {
+      hasConflict: breachCount > 0,
+      breachCount,
+      minDistanceToHazard,
+    };
   };
-};
 
-const handleShowDirections = async () => {
-  if (!selectedShelter || !userCoords.lat || !userCoords.lng) return;
+  const calculateRouteToTarget = async (targetLocation) => {
+    if (!targetLocation || !userCoords.lat || !userCoords.lng) return;
 
-  const destLat = selectedShelter.lat;
-  const destLng = selectedShelter.lng || selectedShelter.lon;
+    const destLat = targetLocation.lat;
+    const destLng = targetLocation.lng || targetLocation.lon;
 
-  setIsCalculatingRoute(true);
+    setIsCalculatingRoute(true);
 
-  try {
-    const hazards = incidents
-      .map((inc) => {
-        const typeStr = (inc.type || inc.description || inc.title || '').toLowerCase();
-        const isFlood = typeStr.includes('flood') || typeStr.includes('water');
-        let coords = inc.location?.coordinates;
+    try {
+      const hazards = incidents
+        .map((inc) => {
+          const typeStr = (inc.type || inc.description || inc.title || '').toLowerCase();
+          const isFlood = typeStr.includes('flood') || typeStr.includes('water');
+          let coords = inc.location?.coordinates;
 
-        if (Array.isArray(coords) && coords.length === 2) {
-          return { lat: coords[1], lng: coords[0], isFlood };
-        } else if (inc.lat && (inc.lng || inc.lon)) {
-          return { lat: inc.lat, lng: inc.lng || inc.lon, isFlood };
-        }
-        return null;
-      })
-      .filter(Boolean);
+          if (Array.isArray(coords) && coords.length === 2) {
+            return { lat: coords[1], lng: coords[0], isFlood };
+          } else if (inc.lat && (inc.lng || inc.lon)) {
+            return { lat: inc.lat, lng: inc.lng || inc.lon, isFlood };
+          }
+          return null;
+        })
+        .filter(Boolean);
 
-    // Fetch primary + alternative local routes strictly from OSRM
-    const osrmBaseUrl = `https://router.project-osrm.org/route/v1/driving/${userCoords.lng},${userCoords.lat};${destLng},${destLat}?overview=full&geometries=geojson&alternatives=true`;
-    const res = await fetch(osrmBaseUrl);
-    const data = await res.json();
+      // Fetch primary + alternative local routes strictly from OSRM
+      const osrmBaseUrl = `https://router.project-osrm.org/route/v1/driving/${userCoords.lng},${userCoords.lat};${destLng},${destLat}?overview=full&geometries=geojson&alternatives=true`;
+      const res = await fetch(osrmBaseUrl);
+      const data = await res.json();
 
-    if (!data.routes || data.routes.length === 0) {
-      setIsCalculatingRoute(false);
-      return;
-    }
-
-    let bestRoute = null;
-
-    // 1. Try to find a completely safe route
-    for (let route of data.routes) {
-      const evaluation = checkRouteHasHazards(route.geometry.coordinates, hazards);
-      if (!evaluation.hasConflict) {
-        bestRoute = route;
-        break;
+      if (!data.routes || data.routes.length === 0) {
+        setIsCalculatingRoute(false);
+        return;
       }
-    }
 
-    // 2. If ALL alternatives pass near the hazard, pick the alternative with the fewest hazard intersections
-    if (!bestRoute) {
-      let lowestBreaches = Infinity;
-      
+      let bestRoute = null;
+
+      // 1. Try to find a completely safe route
       for (let route of data.routes) {
-        const evalResult = checkRouteHasHazards(route.geometry.coordinates, hazards);
-        if (evalResult.breachCount < lowestBreaches) {
-          lowestBreaches = evalResult.breachCount;
+        const evaluation = checkRouteHasHazards(route.geometry.coordinates, hazards);
+        if (!evaluation.hasConflict) {
           bestRoute = route;
+          break;
         }
       }
+
+      // 2. If ALL alternatives pass near the hazard, pick the alternative with the fewest hazard intersections
+      if (!bestRoute) {
+        let lowestBreaches = Infinity;
+        
+        for (let route of data.routes) {
+          const evalResult = checkRouteHasHazards(route.geometry.coordinates, hazards);
+          if (evalResult.breachCount < lowestBreaches) {
+            lowestBreaches = evalResult.breachCount;
+            bestRoute = route;
+          }
+        }
+      }
+
+      // Fallback to primary route
+      if (!bestRoute) {
+        bestRoute = data.routes[0];
+      }
+
+      // Double-check total distance safety cap (if route exceeds 25 km for a local trip, enforce direct route)
+      const routeDistanceKm = bestRoute.distance / 1000;
+      if (routeDistanceKm > 25) {
+        bestRoute = data.routes[0];
+      }
+
+      setSafeRoute({
+        coordinates: bestRoute.geometry.coordinates,
+        distance: (bestRoute.distance / 1000).toFixed(1),
+        duration: Math.round(bestRoute.duration / 60),
+      });
+    } catch (err) {
+      console.error('Error calculating route:', err);
+    } finally {
+      setIsCalculatingRoute(false);
     }
+  };
 
-    // Fallback to primary route
-    if (!bestRoute) {
-      bestRoute = data.routes[0];
+  const handleShowDirections = () => {
+    calculateRouteToTarget(selectedShelter);
+  };
+
+  // Search destination city/location handler
+  const handleDestinationSearch = async (e) => {
+    e.preventDefault();
+    if (!destinationSearch.trim()) return;
+
+    setIsSearchingDestination(true);
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destinationSearch)}`
+      );
+      const results = await response.json();
+
+      if (results && results.length > 0) {
+        const topResult = results[0];
+        const destLat = parseFloat(topResult.lat);
+        const destLng = parseFloat(topResult.lon);
+
+        const targetDestination = {
+          id: `destination-${Date.now()}`,
+          name: topResult.display_name.split(',')[0] || destinationSearch,
+          lat: destLat,
+          lng: destLng,
+          lon: destLng,
+          distance: `${calculateDistance(userCoords.lat, userCoords.lng, destLat, destLng)} km`,
+          is_safe: true,
+          risk_level: 'Destination Selected',
+        };
+
+        setSelectedShelter(targetDestination);
+        await calculateRouteToTarget(targetDestination);
+      } else {
+        alert('Location not found. Please try entering a valid city or address.');
+      }
+    } catch (err) {
+      console.error('Error searching destination:', err);
+      alert('Failed to search location. Please check your network and try again.');
+    } finally {
+      setIsSearchingDestination(false);
     }
-
-    // Double-check total distance safety cap (if route exceeds 25 km for a local trip, enforce direct route)
-    const routeDistanceKm = bestRoute.distance / 1000;
-    if (routeDistanceKm > 25) {
-      bestRoute = data.routes[0];
-    }
-
-    setSafeRoute({
-      coordinates: bestRoute.geometry.coordinates,
-      distance: (bestRoute.distance / 1000).toFixed(1),
-      duration: Math.round(bestRoute.duration / 60),
-    });
-  } catch (err) {
-    console.error('Error calculating route:', err);
-  } finally {
-    setIsCalculatingRoute(false);
-  }
-};
-
+  };
 
   const fetchNearbyInstitutions = useCallback(async (lat, lng, force = false) => {
     if (
@@ -477,6 +526,52 @@ const handleShowDirections = async () => {
             ))}
           </div>
         </div>
+
+        {/* Small Destination Search Bar directly above the map */}
+        <form
+          onSubmit={handleDestinationSearch}
+          style={{
+            display: 'flex',
+            gap: '8px',
+            marginBottom: '0.75rem',
+            alignItems: 'center',
+          }}
+        >
+          <input
+            type="text"
+            placeholder="Search destination city or trip location for safe route..."
+            value={destinationSearch}
+            onChange={(e) => setDestinationSearch(e.target.value)}
+            style={{
+              flex: 1,
+              padding: '8px 12px',
+              borderRadius: '6px',
+              border: '1px solid rgba(255, 255, 255, 0.2)',
+              backgroundColor: 'rgba(255, 255, 255, 0.05)',
+              color: '#ffffff',
+              fontSize: '0.9rem',
+              outline: 'none',
+            }}
+          />
+          <button
+            type="submit"
+            disabled={isSearchingDestination}
+            style={{
+              backgroundColor: '#2563eb',
+              color: '#ffffff',
+              border: 'none',
+              padding: '8px 16px',
+              borderRadius: '6px',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              fontSize: '0.9rem',
+              whiteSpace: 'nowrap',
+              opacity: isSearchingDestination ? 0.7 : 1,
+            }}
+          >
+            {isSearchingDestination ? '🔍 Searching...' : '🔍 Find Safe Route'}
+          </button>
+        </form>
 
         <LiveMap
           activeLayer={activeLayer}
