@@ -1,0 +1,2 @@
+{"type":"config","name":"AI Disaster Response ML Model Exploration & UI Upgrade","metricName":"novelty_score","metricUnit":"pts","bestDirection":"higher"}
+{"run":0,"commit":"e1fc808","metric":40.0,"metrics":{"sota_gap_pct":0.0,"contrast_score":30,"proof_strength":20,"prior_art_clear":0},"status":"keep","description":"baseline: project audit — XGBoost pipeline, synthetic data, no uncertainty, no geospatial modeling, Nepal-only demo","timestamp":1789054362,"segment":0}
