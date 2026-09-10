@@ -1,0 +1,62 @@
+[
+  {
+    "model": "XGBoost",
+    "accuracy": 0.78,
+    "macro_f1": 0.7841,
+    "auc_roc": 0.931,
+    "log_loss": 0.477,
+    "conformal_coverage": 0.9075,
+    "avg_pred_set_size": 1.2975,
+    "train_time_s": 2.786,
+    "inference_latency_ms": 0.758,
+    "model_size_kb": 1579.2
+  },
+  {
+    "model": "RandomForest",
+    "accuracy": 0.7825,
+    "macro_f1": 0.7872,
+    "auc_roc": 0.9326,
+    "log_loss": 0.4732,
+    "conformal_coverage": 0.91,
+    "avg_pred_set_size": 1.275,
+    "train_time_s": 0.787,
+    "inference_latency_ms": 97.755,
+    "model_size_kb": 5643.9
+  },
+  {
+    "model": "ExtraTrees",
+    "accuracy": 0.7675,
+    "macro_f1": 0.7672,
+    "auc_roc": 0.9135,
+    "log_loss": 0.5704,
+    "conformal_coverage": 0.9,
+    "avg_pred_set_size": 1.335,
+    "train_time_s": 0.392,
+    "inference_latency_ms": 90.471,
+    "model_size_kb": 8994.0
+  },
+  {
+    "model": "GradientBoosting",
+    "accuracy": 0.78,
+    "macro_f1": 0.7829,
+    "auc_roc": 0.9266,
+    "log_loss": 0.5159,
+    "conformal_coverage": 0.8875,
+    "avg_pred_set_size": 1.21,
+    "train_time_s": 5.028,
+    "inference_latency_ms": 1.034,
+    "model_size_kb": 2396.4
+  },
+  {
+    "model": "MLP (PyTorch)",
+    "accuracy": 0.76,
+    "macro_f1": 0.765,
+    "auc_roc": 0.9168,
+    "log_loss": 0.5075,
+    "conformal_coverage": 0.9125,
+    "avg_pred_set_size": 1.355,
+    "train_time_s": 10.555,
+    "inference_latency_ms": 0,
+    "model_size_kb": 0
+  }
+]
