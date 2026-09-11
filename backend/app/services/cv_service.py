@@ -5,9 +5,28 @@ from PIL import Image, UnidentifiedImageError
 
 logger = logging.getLogger(__name__)
 
-# --------------------------------------------------
-# Incident-report CV categories
-# --------------------------------------------------
+MODEL_ID = "openai/clip-vit-base-patch32"
+
+processor = None
+model = None
+device = None
+CV_MODEL_LOADED = False
+
+
+try:
+    import torch
+    from transformers import (
+        AutoModelForZeroShotImageClassification,
+        AutoProcessor,
+    )
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    CV_MODEL_LOADED = True
+
+except Exception as error:
+    logger.warning(f"CLIP dependencies unavailable: {error}")
+    CV_MODEL_LOADED = False
+
 
 INCIDENT_TYPES = [
     "Flood",
@@ -21,45 +40,176 @@ INCIDENT_TYPES = [
 ]
 
 INCIDENT_PROMPTS = [
-    "a photo of a flood, waterlogging, or a flooded road",
-    "a photo of a road blocked by debris, rocks, vehicles, or obstacles",
-    "a photo of structural damage, a damaged building, or a collapsed building",
-    "a photo of a landslide, mudslide, or rocks on a road",
-    "a photo of a fire, burning building, wildfire, or flames",
+    "a photo of flood water, waterlogging, or a flooded road",
+    "a photo of a blocked road with debris, rocks, or obstacles",
+    "a photo of structural damage or a collapsed building",
+    "a photo of a landslide, mudslide, rocks, or mud on a road",
+    "a photo of fire, flames, wildfire, or a burning building",
     "a photo of a fallen tree blocking a road",
-    "a photo of another natural disaster or emergency incident",
-    "a normal photo with no emergency, no damage, and no disaster",
+    "a photo of another natural disaster or emergency",
+    "a normal image with no disaster and no emergency",
 ]
 
-MODEL_ID = "openai/clip-vit-base-patch32"
 
-processor = None
-model = None
-device = None
-CV_MODEL_LOADED = False
+RESOLUTION_PROMPTS = {
+    "Flood": {
+        "labels": [
+            "Clear flood scene",
+            "Active flood",
+            "Unrelated random image",
+        ],
+        "prompts": [
+            (
+                "a normal dry house, dry road, clear street, green lawn, "
+                "or safe area with no flood water and no waterlogging"
+            ),
+            (
+                "an active flood, flood water, waterlogging, "
+                "or a flooded road"
+            ),
+            (
+                "a cat, dog, pet, selfie, food, document, screenshot, "
+                "or unrelated random object"
+            ),
+        ],
+    },
+    "Blocked Road": {
+        "labels": [
+            "Clear blocked road scene",
+            "Active blocked road",
+            "Unrelated random image",
+        ],
+        "prompts": [
+            (
+                "a clear open road, normal dry street, normal house, "
+                "or safe area with no debris and no obstruction"
+            ),
+            (
+                "a road blocked by debris, rocks, vehicles, "
+                "fallen objects, or obstacles"
+            ),
+            (
+                "a cat, dog, pet, selfie, food, document, screenshot, "
+                "or unrelated random object"
+            ),
+        ],
+    },
+    "Structural Damage": {
+        "labels": [
+            "Clear structural damage scene",
+            "Active structural damage",
+            "Unrelated random image",
+        ],
+        "prompts": [
+            (
+                "a normal safe house, repaired building, undamaged building, "
+                "or clear safe area with no structural damage"
+            ),
+            (
+                "a damaged building, collapsed building, broken structure, "
+                "or unsafe structural damage"
+            ),
+            (
+                "a cat, dog, pet, selfie, food, document, screenshot, "
+                "or unrelated random object"
+            ),
+        ],
+    },
+    "Landslide": {
+        "labels": [
+            "Clear landslide scene",
+            "Active landslide",
+            "Unrelated random image",
+        ],
+        "prompts": [
+            (
+                "a clear road, normal dry street, normal house, "
+                "or safe area with no mud, rocks, debris, or landslide"
+            ),
+            (
+                "an active landslide, mudslide, mud, rocks, "
+                "or debris blocking a road"
+            ),
+            (
+                "a cat, dog, pet, selfie, food, document, screenshot, "
+                "or unrelated random object"
+            ),
+        ],
+    },
+    "Fire": {
+        "labels": [
+            "Clear fire scene",
+            "Active fire",
+            "Unrelated random image",
+        ],
+        "prompts": [
+            (
+                "a normal safe house, normal building, clear area, "
+                "or safe scene with no fire, no smoke, and no flames"
+            ),
+            (
+                "an active fire, flames, burning building, "
+                "wildfire, or heavy smoke"
+            ),
+            (
+                "a cat, dog, pet, selfie, food, document, screenshot, "
+                "or unrelated random object"
+            ),
+        ],
+    },
+    "Fallen Tree": {
+        "labels": [
+            "Clear fallen tree scene",
+            "Active fallen tree hazard",
+            "Unrelated random image",
+        ],
+        "prompts": [
+            (
+                "a clear road, normal dry street, normal house, "
+                "or safe area after a fallen tree has been removed"
+            ),
+            (
+                "a fallen tree blocking a road, path, "
+                "vehicle, or building"
+            ),
+            (
+                "a cat, dog, pet, selfie, food, document, screenshot, "
+                "or unrelated random object"
+            ),
+        ],
+    },
+    "Other": {
+        "labels": [
+            "Clear emergency scene",
+            "Active emergency scene",
+            "Unrelated random image",
+        ],
+        "prompts": [
+            (
+                "a normal safe house, normal dry road, clear area, "
+                "or safe scene with no disaster and no emergency"
+            ),
+            (
+                "an active emergency, natural disaster, "
+                "visible danger, or serious damage"
+            ),
+            (
+                "a cat, dog, pet, selfie, food, document, screenshot, "
+                "or unrelated random object"
+            ),
+        ],
+    },
+}
 
-# --------------------------------------------------
-# Model loading
-# --------------------------------------------------
+# Random pet/selfie/document images are rejected at 45%.
+UNRELATED_REJECT_CONFIDENCE = 0.45
 
-try:
-    import torch
-    from transformers import (
-        AutoModelForZeroShotImageClassification,
-        AutoProcessor,
-    )
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    CV_MODEL_LOADED = True
-    logger.info("CLIP computer vision dependencies loaded.")
-
-except Exception as error:
-    logger.warning(f"CLIP dependencies unavailable: {error}")
-    CV_MODEL_LOADED = False
+# Only very confident active hazards are rejected.
+# Normal house/normal road images will be treated as clear scenes.
+ACTIVE_HAZARD_REJECT_CONFIDENCE = 0.80
 
 
 def get_model():
-    """Load CLIP only when it is first needed."""
     global processor, model
 
     if not CV_MODEL_LOADED:
@@ -67,17 +217,18 @@ def get_model():
 
     if processor is None or model is None:
         processor = AutoProcessor.from_pretrained(MODEL_ID)
+
         model = AutoModelForZeroShotImageClassification.from_pretrained(
             MODEL_ID
         )
+
         model.to(device)
         model.eval()
 
     return processor, model
 
 
-def is_valid_image(image_path):
-    """Check that the uploaded file is a genuine image."""
+def get_image_details(image_path):
     if not os.path.exists(image_path):
         return False, None, None, None
 
@@ -86,11 +237,12 @@ def is_valid_image(image_path):
             image.verify()
 
         with Image.open(image_path) as image:
-            image = image.convert("RGB")
-            width, height = image.size
-            image_format = image.format
-
-        return True, width, height, image_format
+            return (
+                True,
+                image.size[0],
+                image.size[1],
+                image.format,
+            )
 
     except UnidentifiedImageError:
         return False, None, None, None
@@ -101,7 +253,6 @@ def is_valid_image(image_path):
 
 
 def classify_image(image, labels, prompts):
-    """Run CLIP zero-shot classification for supplied labels/prompts."""
     image_processor, clip_model = get_model()
 
     if not image_processor or not clip_model:
@@ -123,13 +274,16 @@ def classify_image(image, labels, prompts):
         outputs = clip_model(**inputs)
         probabilities = outputs.logits_per_image[0].softmax(dim=0)
 
-    detections = []
-
-    for label, score in zip(labels, probabilities.cpu().tolist()):
-        detections.append({
+    detections = [
+        {
             "label": label,
             "confidence": round(score * 100, 2),
-        })
+        }
+        for label, score in zip(
+            labels,
+            probabilities.cpu().tolist(),
+        )
+    ]
 
     detections.sort(
         key=lambda detection: detection["confidence"],
@@ -140,12 +294,8 @@ def classify_image(image, labels, prompts):
 
 
 def verify_incident_image(image_path):
-    """
-    Analyses an incident-report image.
-    This is used when a citizen initially reports an emergency.
-    """
-
-    is_valid, width, height, image_format = is_valid_image(image_path)
+    """CV analysis for a newly reported incident image."""
+    is_valid, width, height, image_format = get_image_details(image_path)
 
     if not is_valid:
         return {
@@ -157,25 +307,22 @@ def verify_incident_image(image_path):
             "message": "The uploaded file is not a valid image.",
         }
 
+    if not CV_MODEL_LOADED:
+        return {
+            "status": "pending_review",
+            "confidence_score": 0.0,
+            "detected_labels": ["Image received"],
+            "detections": [],
+            "image_width": width,
+            "image_height": height,
+            "image_format": image_format,
+            "model": "Computer Vision Unavailable",
+            "message": "Image is valid but CV is unavailable.",
+        }
+
     try:
         with Image.open(image_path) as source_image:
             image = source_image.convert("RGB")
-
-            if not CV_MODEL_LOADED:
-                return {
-                    "status": "pending_review",
-                    "confidence_score": 0.0,
-                    "detected_labels": ["Image received"],
-                    "detections": [],
-                    "image_width": width,
-                    "image_height": height,
-                    "image_format": image_format,
-                    "model": "Computer Vision Unavailable",
-                    "message": (
-                        "Image is valid, but the CV model is unavailable. "
-                        "The report remains pending."
-                    ),
-                }
 
             detections = classify_image(
                 image,
@@ -183,40 +330,35 @@ def verify_incident_image(image_path):
                 INCIDENT_PROMPTS,
             )
 
-            if not detections:
-                return {
-                    "status": "pending_review",
-                    "confidence_score": 0.0,
-                    "detected_labels": [],
-                    "detections": [],
-                    "image_width": width,
-                    "image_height": height,
-                    "image_format": image_format,
-                    "model": "CLIP Zero-Shot Image Classifier",
-                    "message": "Image analysis could not complete.",
-                }
-
-            predicted_incident = detections[0]["label"]
-            confidence_score = detections[0]["confidence"] / 100
-
+        if not detections:
             return {
                 "status": "pending_review",
-                "confidence_score": round(confidence_score, 4),
-                "detected_labels": [predicted_incident],
-                "detections": detections,
-                "image_width": width,
-                "image_height": height,
-                "image_format": image_format,
+                "confidence_score": 0.0,
+                "detected_labels": [],
+                "detections": [],
                 "model": "CLIP Zero-Shot Image Classifier",
-                "mode": "ZeroShot_Transformers",
-                "message": (
-                    f"Computer vision prediction: {predicted_incident} "
-                    f"({detections[0]['confidence']}%)."
-                ),
+                "message": "CV could not analyse this image.",
             }
 
+        prediction = detections[0]
+
+        return {
+            "status": "pending_review",
+            "confidence_score": round(prediction["confidence"] / 100, 4),
+            "detected_labels": [prediction["label"]],
+            "detections": detections,
+            "image_width": width,
+            "image_height": height,
+            "image_format": image_format,
+            "model": "CLIP Zero-Shot Image Classifier",
+            "message": (
+                f"Computer Vision prediction: {prediction['label']} "
+                f"({prediction['confidence']}%)."
+            ),
+        }
+
     except Exception as error:
-        logger.error(f"Incident CV inference error: {error}")
+        logger.error(f"Initial incident CV error: {error}")
 
         return {
             "status": "pending_review",
@@ -224,120 +366,20 @@ def verify_incident_image(image_path):
             "detected_labels": [],
             "detections": [],
             "model": "CLIP Zero-Shot Image Classifier",
-            "message": "Image analysis could not complete.",
+            "message": "CV could not analyse this image.",
         }
-
-
-# --------------------------------------------------
-# Automatic resolution-proof verification
-# --------------------------------------------------
-
-RESOLUTION_PROMPTS = {
-    "Flood": {
-        "labels": [
-            "Resolved flood scene",
-            "Active flood",
-            "Unrelated image",
-        ],
-        "prompts": [
-            "a dry cleared road after flooding, no flood water, no waterlogging",
-            "an active flood, flood water, waterlogging, or a flooded road",
-            "a cat, dog, selfie, food, document, indoor photo, or unrelated random image",
-        ],
-    },
-    "Blocked Road": {
-        "labels": [
-            "Resolved blocked road",
-            "Active blocked road",
-            "Unrelated image",
-        ],
-        "prompts": [
-            "a clear open road with no debris and no obstruction",
-            "a road blocked by debris, rocks, fallen objects, or vehicles",
-            "a cat, dog, selfie, food, document, indoor photo, or unrelated random image",
-        ],
-    },
-    "Structural Damage": {
-        "labels": [
-            "Resolved structural damage",
-            "Active structural damage",
-            "Unrelated image",
-        ],
-        "prompts": [
-            "a safe repaired building or a cleared safe area after structural damage",
-            "a damaged building, collapsed building, broken structure, or unsafe structural damage",
-            "a cat, dog, selfie, food, document, indoor photo, or unrelated random image",
-        ],
-    },
-    "Landslide": {
-        "labels": [
-            "Resolved landslide",
-            "Active landslide",
-            "Unrelated image",
-        ],
-        "prompts": [
-            "a cleared road after a landslide, with no mud, rocks, or debris blocking it",
-            "an active landslide, mudslide, rocks, mud, or debris blocking a road",
-            "a cat, dog, selfie, food, document, indoor photo, or unrelated random image",
-        ],
-    },
-    "Fire": {
-        "labels": [
-            "Resolved fire scene",
-            "Active fire",
-            "Unrelated image",
-        ],
-        "prompts": [
-            "a safe fire aftermath with no flames, no smoke, and no active fire",
-            "an active fire, flames, burning building, wildfire, or heavy smoke",
-            "a cat, dog, selfie, food, document, indoor photo, or unrelated random image",
-        ],
-    },
-    "Fallen Tree": {
-        "labels": [
-            "Resolved fallen tree scene",
-            "Active fallen tree hazard",
-            "Unrelated image",
-        ],
-        "prompts": [
-            "a clear road after a fallen tree has been removed",
-            "a fallen tree blocking a road, path, vehicle, or building",
-            "a cat, dog, selfie, food, document, indoor photo, or unrelated random image",
-        ],
-    },
-    "Other": {
-        "labels": [
-            "Resolved emergency scene",
-            "Active emergency scene",
-            "Unrelated image",
-        ],
-        "prompts": [
-            "a safe cleared area after an emergency or natural disaster",
-            "an active emergency, active natural disaster, visible danger, or damage",
-            "a cat, dog, selfie, food, document, indoor photo, or unrelated random image",
-        ],
-    },
-}
-
-# A result must be strong before automatic resolution.
-AUTO_RESOLVE_CONFIDENCE = 0.60
-
-# Reject clearly unrelated photos or an active hazard.
-REJECT_CONFIDENCE = 0.45
 
 
 def verify_resolution_proof(image_path, incident_type):
     """
-    Automatically verifies a proof image for ANY incident type.
+    Automatic proof verification.
 
-    Result statuses:
-    - approved: incident can be marked RESOLVED automatically.
-    - rejected: proof is unrelated or hazard is still active.
-    - needs_new_proof: CV is unsure; incident remains active.
-    - invalid_image: invalid/corrupt image.
+    Normal dry house/road/clear scene -> approved.
+    Very clear active incident -> rejected.
+    Cat/dog/selfie/food/document -> rejected.
     """
 
-    is_valid, width, height, image_format = is_valid_image(image_path)
+    is_valid, width, height, image_format = get_image_details(image_path)
 
     if not is_valid:
         return {
@@ -349,139 +391,106 @@ def verify_resolution_proof(image_path, incident_type):
             "message": "The uploaded proof is not a valid image.",
         }
 
-    incident_type = incident_type or "Other"
-
     if incident_type not in RESOLUTION_PROMPTS:
         incident_type = "Other"
 
-    proof_config = RESOLUTION_PROMPTS[incident_type]
-
-    # Do not auto-resolve if computer vision cannot run.
     if not CV_MODEL_LOADED:
         return {
             "status": "needs_new_proof",
             "confidence_score": 0.0,
             "detected_labels": [],
             "detections": [],
-            "image_width": width,
-            "image_height": height,
-            "image_format": image_format,
             "model": "Computer Vision Unavailable",
-            "message": (
-                "Proof image is valid, but CV is unavailable. "
-                "The incident remains active; upload another proof later."
-            ),
+            "message": "Computer vision is unavailable.",
         }
 
     try:
         with Image.open(image_path) as source_image:
             image = source_image.convert("RGB")
 
+            config = RESOLUTION_PROMPTS[incident_type]
+
             detections = classify_image(
                 image,
-                proof_config["labels"],
-                proof_config["prompts"],
+                config["labels"],
+                config["prompts"],
             )
 
-            if not detections:
-                return {
-                    "status": "needs_new_proof",
-                    "confidence_score": 0.0,
-                    "detected_labels": [],
-                    "detections": [],
-                    "image_width": width,
-                    "image_height": height,
-                    "image_format": image_format,
-                    "model": "CLIP Resolution Proof Verifier",
-                    "message": (
-                        "Computer vision could not analyse this proof. "
-                        "Please upload a clearer photo."
-                    ),
-                }
-
-            best_result = detections[0]
-            label = best_result["label"]
-            confidence = best_result["confidence"] / 100
-
-            base_result = {
-                "confidence_score": round(confidence, 4),
-                "detected_labels": [label],
-                "detections": detections,
-                "image_width": width,
-                "image_height": height,
-                "image_format": image_format,
+        if not detections:
+            return {
+                "status": "needs_new_proof",
+                "confidence_score": 0.0,
+                "detected_labels": [],
+                "detections": [],
                 "model": "CLIP Resolution Proof Verifier",
-                "incident_type": incident_type,
-                "mode": "Automatic_Resolution_Proof_Check",
+                "message": "CV could not analyse this proof image.",
             }
 
-            if (
-                label == "Unrelated image"
-                and confidence >= REJECT_CONFIDENCE
-            ):
-                return {
-                    **base_result,
-                    "status": "rejected",
-                    "message": (
-                        "Proof rejected: the uploaded photo appears unrelated "
-                        f"to the {incident_type} incident."
-                    ),
-                }
+        best_result = detections[0]
+        label = best_result["label"]
+        confidence = best_result["confidence"] / 100
 
-            if (
-                label == "Active flood"
-                or label == "Active blocked road"
-                or label == "Active structural damage"
-                or label == "Active landslide"
-                or label == "Active fire"
-                or label == "Active fallen tree hazard"
-                or label == "Active emergency scene"
-            ):
-                if confidence >= REJECT_CONFIDENCE:
-                    return {
-                        **base_result,
-                        "status": "rejected",
-                        "message": (
-                            "Proof rejected: computer vision indicates that "
-                            f"the {incident_type} hazard may still be active."
-                        ),
-                    }
+        result = {
+            "confidence_score": round(confidence, 4),
+            "detected_labels": [label],
+            "detections": detections,
+            "image_width": width,
+            "image_height": height,
+            "image_format": image_format,
+            "model": "CLIP Resolution Proof Verifier",
+            "incident_type": incident_type,
+            "mode": "Automatic_Resolution_Proof_Check",
+        }
 
-            resolved_labels = [
-                "Resolved flood scene",
-                "Resolved blocked road",
-                "Resolved structural damage",
-                "Resolved landslide",
-                "Resolved fire scene",
-                "Resolved fallen tree scene",
-                "Resolved emergency scene",
-            ]
-
-            if (
-                label in resolved_labels
-                and confidence >= AUTO_RESOLVE_CONFIDENCE
-            ):
-                return {
-                    **base_result,
-                    "status": "approved",
-                    "message": (
-                        f"Proof accepted: computer vision verified a resolved "
-                        f"{incident_type} scene with "
-                        f"{best_result['confidence']}% confidence."
-                    ),
-                }
-
+        if (
+            label == "Unrelated random image"
+            and confidence >= UNRELATED_REJECT_CONFIDENCE
+        ):
             return {
-                **base_result,
-                "status": "needs_new_proof",
+                **result,
+                "status": "rejected",
                 "message": (
-                    "Proof image is unclear. The incident remains active. "
-                    "Please upload a clearer photo showing the resolved area."
+                    f"Proof rejected: uploaded image is unrelated "
+                    f"to the {incident_type} incident."
                 ),
             }
 
+        active_labels = [
+            "Active flood",
+            "Active blocked road",
+            "Active structural damage",
+            "Active landslide",
+            "Active fire",
+            "Active fallen tree hazard",
+            "Active emergency scene",
+        ]
+
+        if (
+            label in active_labels
+            and confidence >= ACTIVE_HAZARD_REJECT_CONFIDENCE
+        ):
+            return {
+                **result,
+                "status": "rejected",
+                "message": (
+                    f"Proof rejected: computer vision strongly indicates "
+                    f"that the {incident_type} hazard may still be active."
+                ),
+            }
+
+        # Clear/normal home or road is automatically accepted here.
+        return {
+            **result,
+            "status": "approved",
+            "message": (
+                f"Proof accepted: computer vision verified a clear "
+                f"{incident_type} scene with "
+                f"{best_result['confidence']}% confidence."
+            ),
+        }
+
     except Exception as error:
-        logger.error(f"Resolution-proof CV error: {error}")
+        logger.error(f"Proof CV verification error: {error}")
 
         return {
             "status": "needs_new_proof",
@@ -489,8 +498,5 @@ def verify_resolution_proof(image_path, incident_type):
             "detected_labels": [],
             "detections": [],
             "model": "CLIP Resolution Proof Verifier",
-            "message": (
-                "Computer vision could not verify this proof. "
-                "Please upload another clear image."
-            ),
+            "message": "CV could not verify this proof image.",
         }
