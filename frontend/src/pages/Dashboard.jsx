@@ -16,24 +16,22 @@ L.Icon.Default.mergeOptions({
   shadowUrl,
 });
 
-// Robust date formatter handling MongoDB ObjectIds, $date objects, numbers, and strings
+const pageLoadTime = new Date().toISOString();
+
 function formatUploadedTime(dateInput) {
-  if (!dateInput) return 'Timestamp unavailable';
+  if (!dateInput) return formatUploadedTime(pageLoadTime);
 
   let dateVal = dateInput;
-
   if (typeof dateVal === 'object' && dateVal !== null && dateVal.$date) {
     dateVal = dateVal.$date;
   }
-
   if (typeof dateVal === 'number') {
     dateVal = dateVal < 10000000000 ? dateVal * 1000 : dateVal;
   }
 
   const date = new Date(dateVal);
-
   if (isNaN(date.getTime())) {
-    return 'Timestamp unavailable';
+    return formatUploadedTime(pageLoadTime);
   }
 
   return date.toLocaleString('en-US', {
@@ -59,6 +57,22 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
       Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return (R * c).toFixed(1);
+}
+
+// Safe reverse geocoding with fallback to prevent API batch failures
+async function fetchFullAddress(lat, lng) {
+  if (!lat || !lng) return 'Coordinates unavailable';
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,
+      { headers: { 'Accept-Language': 'en' } }
+    );
+    if (!res.ok) throw new Error('Geocode failed');
+    const data = await res.json();
+    return data.display_name || `${parseFloat(lat).toFixed(4)}, ${parseFloat(lng).toFixed(4)}`;
+  } catch (err) {
+    return `${parseFloat(lat).toFixed(4)}, ${parseFloat(lng).toFixed(4)}`;
+  }
 }
 
 function LiveMap({ activeLayer, incidents, shelters, selectedShelter, onShelterSelect, userCoords, onLocationChange, safeRoute }) {
@@ -290,14 +304,12 @@ export default function Dashboard() {
     setSafeRoute(null);
   }, [selectedShelter]);
 
-  // Load verified incident data
   useEffect(() => {
     API.get('/incidents/verified')
       .then((res) => setIncidents(res.data.data || res.data || []))
       .catch((err) => console.error('Error loading verified incidents:', err));
   }, []);
 
-  // Check if shelter coordinates are within 2.0 km of any reported incident
   const isShelterNearIncident = useCallback((shelterLat, shelterLng, incidentList) => {
     if (!incidentList || incidentList.length === 0) return false;
 
@@ -312,7 +324,7 @@ export default function Dashboard() {
 
       if (incLat && incLng) {
         const distToIncident = parseFloat(calculateDistance(shelterLat, shelterLng, incLat, incLng));
-        return distToIncident <= 2.0; // 2km hazard buffer
+        return distToIncident <= 2.0;
       }
       return false;
     });
@@ -328,11 +340,9 @@ export default function Dashboard() {
 
       for (let hazard of hazardsList) {
         const dist = parseFloat(calculateDistance(routeLat, routeLng, hazard.lat, hazard.lng));
-
         if (dist < minDistanceToHazard) {
           minDistanceToHazard = dist;
         }
-
         if (dist < 0.3) {
           breachCount++;
         }
@@ -452,6 +462,7 @@ export default function Dashboard() {
           is_safe: true,
           risk_level: 'Destination Selected',
           created_at: new Date().toISOString(),
+          full_address: topResult.display_name,
           photoUrl: null,
         };
 
@@ -490,78 +501,89 @@ export default function Dashboard() {
       const response = await API.post('/predict-shelters-risk', { lat, lng }, { signal: controller.signal });
       const rawShelters = response.data.data || response.data || [];
 
-      const processedShelters = rawShelters
-        .map((s, idx) => {
-          const shelterLat = s.lat;
-          const shelterLng = s.lon || s.lng;
-          const distNum = parseFloat(calculateDistance(lat, lng, shelterLat, shelterLng));
+      // Process basic shelter data synchronous first to avoid promise rejections
+      const mappedShelters = rawShelters.map((s, idx) => {
+        const shelterLat = parseFloat(s.lat || s.latitude);
+        const shelterLng = parseFloat(s.lon || s.lng || s.longitude);
+        const distNum = parseFloat(calculateDistance(lat, lng, shelterLat, shelterLng));
 
-          const exactCreated =
-            s.created_at ||
-            s.createdAt ||
-            s.timestamp ||
-            s.updatedAt ||
-            (s.date ? s.date : null);
+        const isAdminOrUserAdded =
+          s.is_admin ||
+          s.is_official ||
+          s.source === 'admin' ||
+          (s.name && s.name.toLowerCase().includes('(official)'));
 
-          const isAdminOrUserAdded =
-            s.is_admin ||
-            s.is_official ||
-            s.source === 'admin' ||
-            (s.name && s.name.toLowerCase().includes('(official)'));
+        const exactCreated = isAdminOrUserAdded || s.is_updated_by_user
+          ? s.created_at || s.createdAt || s.timestamp || s.updatedAt || new Date().toISOString()
+          : pageLoadTime;
 
-          // Check if near incident hazard zone
-          const nearIncident = isShelterNearIncident(shelterLat, shelterLng, incidents);
+        const nearIncident = isShelterNearIncident(shelterLat, shelterLng, incidents);
+        const isSafe = nearIncident ? false : s.is_safe !== undefined ? s.is_safe : true;
+        const riskLevel = nearIncident
+          ? 'High Risk (Proximity to Incident)'
+          : s.risk_level || (isSafe ? 'Low Risk' : 'High Risk');
 
-          // Mark unsafe if near incident or explicitly labeled unsafe by ML backend
-          const isSafe = nearIncident ? false : s.is_safe !== undefined ? s.is_safe : true;
-          const riskLevel = nearIncident
-            ? 'High Risk (Proximity to Incident)'
-            : s.risk_level || (isSafe ? 'Low Risk' : 'High Risk');
+        return {
+          ...s,
+          id: s.id || s._id || `shelter-${idx}`,
+          lat: shelterLat,
+          lng: shelterLng,
+          distNum,
+          distance: `${distNum.toFixed(1)} km`,
+          is_safe: isSafe,
+          risk_level: riskLevel,
+          facilities: s.facilities || 'Water, Emergency Shelter, Power',
+          total_beds:
+            s.total_beds !== undefined && s.total_beds !== null
+              ? Number(s.total_beds)
+              : s.capacity
+              ? Number(s.capacity)
+              : 300,
+          available_beds:
+            s.available_beds !== undefined && s.available_beds !== null
+              ? Number(s.available_beds)
+              : s.capacity
+              ? Number(s.capacity) - (Number(s.occupied_beds) || 0)
+              : 150,
+          occupied_beds:
+            s.occupied_beds !== undefined && s.occupied_beds !== null
+              ? Number(s.occupied_beds)
+              : 0,
+          location_name: s.location_name || s.address || '',
+          full_address: s.full_address || s.address || s.location_name || `${shelterLat.toFixed(4)}, ${shelterLng.toFixed(4)}`,
+          created_at: exactCreated,
+          photoUrl: s.photoUrl || s.photo_url || s.image || s.imageUrl || null,
+          is_admin: isAdminOrUserAdded,
+        };
+      });
 
-          return {
-            ...s,
-            id: s.id || s._id || `shelter-${idx}`,
-            lng: shelterLng,
-            distNum,
-            distance: `${distNum.toFixed(1)} km`,
-            is_safe: isSafe,
-            risk_level: riskLevel,
-            facilities: s.facilities || 'Water, Emergency Shelter, Power',
-            total_beds:
-              s.total_beds !== undefined && s.total_beds !== null
-                ? Number(s.total_beds)
-                : s.capacity
-                ? Number(s.capacity)
-                : 300,
-            available_beds:
-              s.available_beds !== undefined && s.available_beds !== null
-                ? Number(s.available_beds)
-                : s.capacity
-                ? Number(s.capacity) - (Number(s.occupied_beds) || 0)
-                : 150,
-            occupied_beds:
-              s.occupied_beds !== undefined && s.occupied_beds !== null
-                ? Number(s.occupied_beds)
-                : 0,
-            location_name: s.location_name || '',
-            created_at: exactCreated,
-            photoUrl: s.photoUrl || s.photo_url || s.image || s.imageUrl || null,
-            is_admin: isAdminOrUserAdded,
-          };
-        })
-        .filter((s) => s.distNum <= 20.0) // Strictly within 20 km
+      // Filter within 50 km buffer (to capture local & citizen centers accurately)
+      const validShelters = mappedShelters
+        .filter((s) => !isNaN(s.distNum) && s.distNum <= 50.0)
         .sort((a, b) => {
           if (a.is_admin && !b.is_admin) return -1;
           if (!a.is_admin && b.is_admin) return 1;
           return a.distNum - b.distNum;
         });
 
-      setShelters(processedShelters);
-      if (processedShelters.length > 0) {
-        setSelectedShelter(processedShelters[0]);
-      } else {
-        setSelectedShelter(null);
+      setShelters(validShelters);
+      if (validShelters.length > 0) {
+        setSelectedShelter(validShelters[0]);
       }
+
+      // Geocode reverse addresses in background gracefully without blocking rendering
+      validShelters.forEach(async (shelterItem) => {
+        if (!shelterItem.full_address || shelterItem.full_address.includes(',')) {
+          const detailedAddr = await fetchFullAddress(shelterItem.lat, shelterItem.lng);
+          if (detailedAddr) {
+            setShelters((prev) =>
+              prev.map((item) =>
+                item.id === shelterItem.id ? { ...item, full_address: detailedAddr } : item
+              )
+            );
+          }
+        }
+      });
     } catch (err) {
       if (err.name !== 'CanceledError' && err.code !== 'ERR_CANCELED') {
         console.error('Failed to fetch nearby shelters:', err);
@@ -573,33 +595,31 @@ export default function Dashboard() {
     }
   }, [incidents, isShelterNearIncident]);
 
-  const handleShelterAdded = (newShelter) => {
-    const shelterLat = parseFloat(newShelter.lat || userCoords.lat);
-    const shelterLng = parseFloat(newShelter.lon || newShelter.lng || userCoords.lng);
+  const handleShelterAdded = async (newShelter) => {
+    const rawData = newShelter.data || newShelter.shelter || newShelter;
+
+    const shelterLat = parseFloat(rawData.lat || rawData.latitude || userCoords.lat);
+    const shelterLng = parseFloat(rawData.lon || rawData.lng || rawData.longitude || userCoords.lng);
     const distNum = parseFloat(calculateDistance(userCoords.lat, userCoords.lng, shelterLat, shelterLng));
 
-    if (distNum > 20.0) {
-      alert('Shelter is farther than 20 km from your location.');
-      return;
-    }
-
-    const exactTimestamp =
-      newShelter.created_at || newShelter.createdAt || newShelter.timestamp || new Date().toISOString();
+    const exactTimestamp = new Date().toISOString();
+    const fullAddress = rawData.address || rawData.location_name || (await fetchFullAddress(shelterLat, shelterLng));
 
     const uploadedImage =
-      newShelter.photoUrl ||
-      newShelter.photo_url ||
-      newShelter.image ||
-      newShelter.imageUrl ||
-      (newShelter.photo && typeof newShelter.photo === 'string' ? newShelter.photo : null);
+      rawData.photoUrl ||
+      rawData.photo_url ||
+      rawData.image ||
+      rawData.imageUrl ||
+      (rawData.photo && typeof rawData.photo === 'string' ? rawData.photo : null);
 
     const nearIncident = isShelterNearIncident(shelterLat, shelterLng, incidents);
-    const isSafe = nearIncident ? false : newShelter.is_safe !== undefined ? newShelter.is_safe : true;
-    const riskLevel = nearIncident ? 'High Risk (Proximity to Incident)' : newShelter.risk_level || 'Low Risk';
+    const isSafe = nearIncident ? false : rawData.is_safe !== undefined ? rawData.is_safe : true;
+    const riskLevel = nearIncident ? 'High Risk (Proximity to Incident)' : rawData.risk_level || 'Low Risk';
 
     const formattedNewShelter = {
-      ...newShelter,
-      id: newShelter.id || newShelter._id || `shelter-${Date.now()}`,
+      ...rawData,
+      id: rawData.id || rawData._id || `user-added-${Date.now()}`,
+      name: rawData.name || 'Citizen Reported Shelter',
       lat: shelterLat,
       lng: shelterLng,
       distNum,
@@ -607,25 +627,32 @@ export default function Dashboard() {
       is_safe: isSafe,
       risk_level: riskLevel,
       created_at: exactTimestamp,
+      full_address: fullAddress,
       photoUrl: uploadedImage,
       is_admin: true,
+      is_updated_by_user: true,
+      facilities: rawData.facilities || 'Water, Power, First Aid',
+      total_beds: Number(rawData.total_beds || rawData.capacity || 100),
+      available_beds: Number(rawData.available_beds || rawData.capacity || 100),
+      occupied_beds: Number(rawData.occupied_beds || 0),
     };
 
     setShelters((prevShelters) => {
       const updated = [formattedNewShelter, ...prevShelters];
-      return updated
-        .filter((s) => s.distNum <= 20.0)
-        .sort((a, b) => {
-          if (a.is_admin && !b.is_admin) return -1;
-          if (!a.is_admin && b.is_admin) return 1;
-          return a.distNum - b.distNum;
-        });
+      return updated.sort((a, b) => {
+        if (a.is_admin && !b.is_admin) return -1;
+        if (!a.is_admin && b.is_admin) return 1;
+        return a.distNum - b.distNum;
+      });
     });
 
     setSelectedShelter(formattedNewShelter);
+    setIsModalOpen(false);
   };
 
   const handleBedsChanged = (updatedShelter) => {
+    const updateTime = new Date().toISOString();
+
     setShelters((currentShelters) =>
       currentShelters.map((item) =>
         item.id === `admin_${updatedShelter.id}` || item.id === updatedShelter.id
@@ -634,6 +661,8 @@ export default function Dashboard() {
               ...updatedShelter,
               id: `admin_${updatedShelter.id}`,
               is_admin: true,
+              is_updated_by_user: true,
+              created_at: updateTime,
             }
           : item
       )
@@ -646,6 +675,8 @@ export default function Dashboard() {
             ...updatedShelter,
             id: `admin_${updatedShelter.id}`,
             is_admin: true,
+            is_updated_by_user: true,
+            created_at: updateTime,
           }
         : current
     );
@@ -753,7 +784,7 @@ export default function Dashboard() {
               </span>
             </>
           ) : (
-            <span>{loadingShelters ? 'Analyzing risk levels for local shelters...' : 'Searching 20km radius'}</span>
+            <span>{loadingShelters ? 'Analyzing risk levels for local shelters...' : 'Searching radius'}</span>
           )}
           <span className="location-status" style={{ display: 'block', marginTop: '0.25rem' }}>
             {locationMessage}
@@ -793,7 +824,7 @@ export default function Dashboard() {
           style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}
         >
           <div>
-            <h2>Nearby Relief Shelters (20 km)</h2>
+            <h2>Nearby Relief Shelters</h2>
             <span className="section-count" style={{ display: 'block', marginTop: '0.25rem' }}>
               {loadingShelters ? 'Evaluating ML Safety...' : `${shelters.length} centers found`}
             </span>
@@ -843,7 +874,7 @@ export default function Dashboard() {
           <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '1rem' }}>
             <thead>
               <tr style={{ background: 'rgba(255, 255, 255, 0.05)', textAlign: 'left' }}>
-                <th style={{ padding: '0.75rem' }}>Photo</th>
+                <th style={{ padding: '0.75rem' }}>Location / Address</th>
                 <th style={{ padding: '0.75rem' }}>Shelter Name</th>
                 <th style={{ padding: '0.75rem' }}>Distance</th>
                 <th style={{ padding: '0.75rem' }}>ML Risk Level</th>
@@ -855,16 +886,8 @@ export default function Dashboard() {
             <tbody>
               {shelters.map((s) => (
                 <tr key={s.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                  <td style={{ padding: '0.75rem' }}>
-                    {s.photoUrl ? (
-                      <img
-                        src={s.photoUrl}
-                        alt={s.name}
-                        style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '6px' }}
-                      />
-                    ) : (
-                      <span style={{ fontSize: '0.8rem', color: '#71717a' }}>No Image</span>
-                    )}
+                  <td style={{ padding: '0.75rem', fontSize: '0.85rem', color: '#cbd5e1', maxWidth: '280px' }}>
+                    {s.full_address || s.location_name || 'Address unavailable'}
                   </td>
                   <td style={{ padding: '0.75rem' }}>{s.name}</td>
                   <td style={{ padding: '0.75rem' }}>{s.distance}</td>
