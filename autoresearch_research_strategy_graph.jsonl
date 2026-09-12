@@ -1,0 +1,6 @@
+{"type":"node","id":"N1","strategy":"assumption violation","parent":null,"status":"explored","metric":40.0,"timestamp":1757500000}
+{"type":"edge","from":null,"to":"N1","kind":"derived"}
+{"type":"node","id":"N2","strategy":"conformal-calibrated generative augmentation for imbalanced tabular flood risk","parent":"N1","status":"frontier","metric":0,"timestamp":1789056275}
+{"type":"edge","from":"N1","to":"N2","kind":"derived"}
+{"type":"node","id":"N3","strategy":"practical system: XGBoost + conformal + interpretable flood risk decision support","parent":"N1","status":"frontier","metric":0,"timestamp":1789056406}
+{"type":"edge","from":"N1","to":"N3","kind":"derived"}

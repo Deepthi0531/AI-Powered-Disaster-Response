@@ -1,12 +1,51 @@
 import { useState } from 'react';
 import API from '../api/axios';
 
-function formatPostTime(dateString) {
-  if (!dateString) return 'Not available';
+// Calculate distance in kilometers using Haversine formula
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  if (lat1 === undefined || lon1 === undefined || lat2 === undefined || lon2 === undefined) {
+    return null;
+  }
+  const p1 = parseFloat(lat1);
+  const p2 = parseFloat(lon1);
+  const p3 = parseFloat(lat2);
+  const p4 = parseFloat(lon2);
 
-  const date = new Date(dateString);
+  if (isNaN(p1) || isNaN(p2) || isNaN(p3) || isNaN(p4)) return null;
+
+  const R = 6371; // Radius of the Earth in km
+  const dLat = ((p3 - p1) * Math.PI) / 180;
+  const dLon = ((p4 - p2) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((p1 * Math.PI) / 180) *
+      Math.cos((p3 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return (R * c).toFixed(2);
+}
+
+function formatPostTime(shelter) {
+  // Extract timestamp from all potential DB keys
+  let rawDate =
+    shelter.created_at ||
+    shelter.createdAt ||
+    shelter.timestamp ||
+    shelter.date ||
+    shelter.created_time ||
+    shelter.uploaded_at;
+
+  // Extract date from MongoDB ObjectId if string date isn't directly present
+  if (!rawDate && shelter._id && typeof shelter._id === 'string' && shelter._id.length === 24) {
+    rawDate = new Date(parseInt(shelter._id.substring(0, 8), 16) * 1000);
+  }
+
+  if (!rawDate) return 'Date not available';
+
+  const date = new Date(rawDate);
   if (Number.isNaN(date.getTime())) {
-    return dateString;
+    return 'Date not available';
   }
 
   return date.toLocaleString('en-IN', {
@@ -27,24 +66,40 @@ function parseInteger(value, fallback = 0) {
 export default function ShelterCard({
   shelter = {},
   isSelected = false,
+  userCoords,
   onSelect,
   onBedsChanged,
 }) {
   const [isUpdating, setIsUpdating] = useState(false);
-  const [hasInteracted, setHasInteracted] = useState(false);
+  const [imageError, setImageError] = useState(false);
 
-  // --- Image Resolution ---
-  const rawImage = shelter.photoUrl || shelter.image_url || shelter.image || shelter.photo;
+  // Extract raw image from possible database keys
+  const rawImage =
+    shelter.image || shelter.image_url || shelter.photoUrl || shelter.photo || shelter.img;
+
   let imageUrl = null;
-
-  if (rawImage) {
+  if (rawImage && typeof rawImage === 'string') {
     const baseURL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-    imageUrl = /^https?:\/\/|^data:image/.test(rawImage)
-      ? rawImage
-      : `${baseURL.replace(/\/$/, '')}/${rawImage.replace(/^\//, '')}`;
+    if (/^https?:\/\/|^data:image/.test(rawImage)) {
+      imageUrl = rawImage;
+    } else {
+      const cleanPath = rawImage.replace(/^\/?/, '');
+      imageUrl = `${baseURL.replace(/\/$/, '')}/${cleanPath}`;
+    }
   }
 
-  // --- Bed Metrics Calculation ---
+  // Calculate distance from user's current location
+  const shelterLat = shelter.lat || shelter.latitude;
+  const shelterLng = shelter.lng || shelter.lon || shelter.longitude;
+  
+  let computedDistance = shelter.distance;
+  if (!computedDistance && userCoords) {
+    const calculated = calculateDistance(userCoords.lat, userCoords.lng, shelterLat, shelterLng);
+    if (calculated !== null) {
+      computedDistance = `${calculated} km away`;
+    }
+  }
+
   const hasBedData =
     shelter.total_beds !== null &&
     shelter.total_beds !== undefined &&
@@ -65,16 +120,13 @@ export default function ShelterCard({
       )
     : 0;
 
-  // --- Bed Updates Handler ---
   const handleBedUpdate = async (action, event) => {
     event.stopPropagation();
-    setHasInteracted(true); // Reveal image on click interaction
-
     setIsUpdating(true);
+
     try {
       let updatedData = { ...shelter };
-      
-      // Fallback or optimistic update locally if API fails or for client updates
+
       if (action === 'remove' && availableBeds > 0) {
         updatedData.available_beds = availableBeds - 1;
         updatedData.occupied_beds = occupiedBeds + 1;
@@ -82,21 +134,16 @@ export default function ShelterCard({
         updatedData.available_beds = availableBeds + 1;
         updatedData.occupied_beds = Math.max(0, occupiedBeds - 1);
       }
-      
-      updatedData.created_at = new Date().toISOString();
-      updatedData.is_updated_by_user = true;
 
       try {
-        const response = await API.patch(`/shelters/${shelter.id}/beds`, { action });
+        const response = await API.patch(`/shelters/${shelter.id || shelter._id}/beds`, { action });
         if (response.data) {
           updatedData = {
-            ...response.data?.data || response.data,
-            created_at: new Date().toISOString(),
-            is_updated_by_user: true
+            ...(response.data?.data || response.data),
           };
         }
       } catch (err) {
-        console.warn('API Endpoint failed, performing local capacity state sync:', err);
+        console.warn('API sync fallback triggered locally:', err);
       }
 
       if (onBedsChanged) {
@@ -109,13 +156,6 @@ export default function ShelterCard({
       setIsUpdating(false);
     }
   };
-
-  const rawTimestamp =
-    shelter.created_at ||
-    shelter.createdAt ||
-    shelter.timestamp ||
-    shelter.created_time ||
-    shelter.uploaded_at;
 
   const isSafe = shelter.is_safe !== false;
 
@@ -138,12 +178,11 @@ export default function ShelterCard({
         transition: 'all 0.2s ease-in-out',
         display: 'flex',
         flexDirection: 'column',
-        justify: 'space-between',
+        justifyContent: 'space-between',
         position: 'relative',
         overflow: 'hidden',
       }}
     >
-      {/* Header Preview Image */}
       <div
         style={{
           width: '100%',
@@ -155,10 +194,11 @@ export default function ShelterCard({
           position: 'relative',
         }}
       >
-        {hasInteracted && imageUrl ? (
+        {imageUrl && !imageError ? (
           <img
             src={imageUrl}
             alt={shelter.name || 'Shelter Image'}
+            onError={() => setImageError(true)}
             style={{
               width: '100%',
               height: '100%',
@@ -180,11 +220,10 @@ export default function ShelterCard({
               textAlign: 'center',
             }}
           >
-            {hasInteracted ? '📷 No Image Available' : '🔒 Click Occupy/Vacate to reveal photo'}
+            📷 Image Not Available
           </div>
         )}
 
-        {/* Safety Badge */}
         <span
           style={{
             position: 'absolute',
@@ -204,7 +243,6 @@ export default function ShelterCard({
         </span>
       </div>
 
-      {/* Primary Details */}
       <div style={{ flex: 1 }}>
         <h3
           style={{
@@ -218,15 +256,21 @@ export default function ShelterCard({
           {shelter.name || 'Unnamed Shelter'}
         </h3>
 
-        <p style={subTextStyle}>
-          📍 <span style={{ color: '#e2e8f0', fontWeight: '600' }}>{shelter.full_address || shelter.location_name || shelter.distance || 'N/A'}</span>
+        {/* Address Line */}
+        <p style={{ margin: '0 0 4px 0', fontSize: '0.825rem', color: '#94a3b8' }}>
+          📍 <span style={{ color: '#e2e8f0', fontWeight: '600' }}>{shelter.address || shelter.full_address || shelter.location_name || 'Coordinates unavailable'}</span>
         </p>
 
-        <p style={subTextStyle}>
-          🕒 Posted: <span style={{ color: '#cbd5e1' }}>{formatPostTime(rawTimestamp)}</span>
+        {/* Distance displayed directly under Address */}
+        <p style={{ margin: '0 0 6px 0', fontSize: '0.825rem', color: '#38bdf8', fontWeight: '600' }}>
+          📏 Distance: {computedDistance || 'Location unavailable'}
         </p>
 
-        {/* Capacity & Live Management */}
+        {/* Timestamp line */}
+        <p style={{ margin: '0 0 6px 0', fontSize: '0.825rem', color: '#94a3b8' }}>
+          🕒 Posted: <span style={{ color: '#cbd5e1' }}>{formatPostTime(shelter)}</span>
+        </p>
+
         <div
           style={{
             backgroundColor: '#1e293b',
@@ -268,7 +312,14 @@ export default function ShelterCard({
               disabled={isUpdating || (hasBedData && availableBeds <= 0)}
               onClick={(e) => handleBedUpdate('remove', e)}
               style={{
-                ...buttonStyle,
+                flex: 1,
+                border: 'none',
+                borderRadius: '6px',
+                padding: '8px',
+                color: '#ffffff',
+                fontSize: '0.8rem',
+                fontWeight: '600',
+                cursor: 'pointer',
                 backgroundColor: '#dc2626',
                 opacity: isUpdating || (hasBedData && availableBeds <= 0) ? 0.4 : 1,
               }}
@@ -281,7 +332,14 @@ export default function ShelterCard({
               disabled={isUpdating || (hasBedData && availableBeds >= totalBeds)}
               onClick={(e) => handleBedUpdate('add', e)}
               style={{
-                ...buttonStyle,
+                flex: 1,
+                border: 'none',
+                borderRadius: '6px',
+                padding: '8px',
+                color: '#ffffff',
+                fontSize: '0.8rem',
+                fontWeight: '600',
+                cursor: 'pointer',
                 backgroundColor: '#059669',
                 opacity: isUpdating || (hasBedData && availableBeds >= totalBeds) ? 0.4 : 1,
               }}
@@ -291,7 +349,6 @@ export default function ShelterCard({
           </div>
         </div>
 
-        {/* Metadata Footer */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.8rem' }}>
           <div style={{ color: '#94a3b8' }}>
             <span style={{ color: '#64748b', fontWeight: '600' }}>Risk Assessment: </span>
@@ -308,21 +365,3 @@ export default function ShelterCard({
     </div>
   );
 }
-
-const subTextStyle = {
-  margin: '0 0 6px 0',
-  fontSize: '0.825rem',
-  color: '#94a3b8',
-};
-
-const buttonStyle = {
-  flex: 1,
-  border: 'none',
-  borderRadius: '6px',
-  padding: '8px',
-  color: '#ffffff',
-  fontSize: '0.8rem',
-  fontWeight: '600',
-  cursor: 'pointer',
-  transition: 'opacity 0.15s ease',
-};
