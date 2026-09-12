@@ -1,54 +1,37 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import API from '../api/axios';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// Haversine distance helper function (returns distance in km)
 function getDistanceKm(lat1, lon1, lat2, lon2) {
-  const R = 6371;
+  const earthRadius = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
+
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos((lat1 * Math.PI) / 180) *
       Math.cos((lat2 * Math.PI) / 180) *
       Math.sin(dLon / 2) *
       Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+
+  return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// Custom CSS-based Blue Pin Icon so it never fails to load images
 const customBluePinIcon = L.divIcon({
   className: 'custom-pin-marker',
   html: `
-    <div style="position: relative; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;">
+    <div style="position:relative;width:30px;height:30px;display:flex;align-items:center;justify-content:center;">
       <div style="
-        position: absolute;
-        width: 18px;
-        height: 18px;
-        background-color: #2563eb;
-        border: 3px solid #ffffff;
-        border-radius: 50%;
-        box-shadow: 0 0 10px rgba(37, 99, 235, 0.8);
-        z-index: 2;
+        position:absolute;width:18px;height:18px;background:#2563eb;
+        border:3px solid white;border-radius:50%;
+        box-shadow:0 0 10px rgba(37,99,235,.8);z-index:2;
       "></div>
       <div style="
-        position: absolute;
-        width: 32px;
-        height: 32px;
-        background-color: rgba(37, 99, 235, 0.35);
-        border-radius: 50%;
-        animation: pulsePin 1.5s infinite ease-in-out;
-        z-index: 1;
+        position:absolute;width:32px;height:32px;background:rgba(37,99,235,.35);
+        border-radius:50%;z-index:1;
       "></div>
     </div>
-    <style>
-      @keyframes pulsePin {
-        0% { transform: scale(0.8); opacity: 0.8; }
-        100% { transform: scale(1.6); opacity: 0; }
-      }
-    </style>
   `,
   iconSize: [30, 30],
   iconAnchor: [15, 15],
@@ -59,258 +42,30 @@ export default function Alerts() {
   const [nearbyIncidents, setNearbyIncidents] = useState([]);
   const [userLocation, setUserLocation] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [locationStatus, setLocationStatus] = useState('Fetching live location...');
+  const [locationStatus, setLocationStatus] = useState(
+    'Fetching live location...'
+  );
   const [addressMap, setAddressMap] = useState({});
 
-  // State for resolving an incident
   const [resolvingId, setResolvingId] = useState(null);
   const [proofFile, setProofFile] = useState(null);
   const [resolvingLoading, setResolvingLoading] = useState(false);
 
-  // Map references
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const centerMarkerRef = useRef(null);
-  const incidentMarkersRef = useRef([]);
+
+  // Stores incident map markers by incident id.
+  const incidentMarkersRef = useRef({});
 
   const BACKEND_BASE_URL = 'http://127.0.0.1:5000';
 
-  // 1. Fetch Verified Incidents from Backend
-  const fetchIncidents = () => {
-    setLoading(true);
-    API.get('/incidents/verified')
-      .then((res) => {
-        const data = res.data.data || [];
-        setIncidents(data);
-        data.forEach((inc) => fetchAddressName(inc));
-      })
-      .catch((err) => {
-        console.error('Failed to load incidents:', err);
-      })
-      .finally(() => setLoading(false));
-  };
-
-  // Convert Lat/Lng into Clean City/Area Name
-  const fetchAddressName = async (incident) => {
-    const id = incident._id || incident.id;
-    const coords = incident.location?.coordinates;
-
-    if (!coords || coords.length < 2) return;
-
-    const lat = coords[1];
-    const lon = coords[0];
-
-    try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`
-      );
-      const data = await res.json();
-
-      if (data && data.address) {
-        const { city, town, village, suburb, neighbourhood, county, state_district } = data.address;
-        const placeName =
-          suburb || neighbourhood || city || town || village || county || state_district || 'Unknown Area';
-        const cityName = city || town || village || state_district || '';
-
-        const fullDisplay = cityName && placeName !== cityName ? `${placeName}, ${cityName}` : placeName;
-
-        setAddressMap((prev) => ({
-          ...prev,
-          [id]: fullDisplay,
-        }));
-      }
-    } catch (err) {
-      console.warn('Failed to reverse geocode location:', err);
-    }
-  };
-
-  useEffect(() => {
-    fetchIncidents();
-  }, []);
-
-  // 2. Get User's Geolocation
-  useEffect(() => {
-    if (!navigator.geolocation) {
-      setLocationStatus('Geolocation is not supported by your browser.');
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const coords = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-        };
-        setUserLocation(coords);
-        setLocationStatus(`Showing incidents within 15 km of your location.`);
-      },
-      (err) => {
-        console.warn('Geolocation denied or failed:', err);
-        setLocationStatus('Location access denied. Click on the map to set a location or viewing all reports.');
-      }
-    );
-  }, []);
-
-  // 3. Leaflet Map Initialization & Interactive Click Pin
-  useEffect(() => {
-    if (!mapContainerRef.current) return;
-
-    const defaultLat = userLocation?.lat || 12.3712;
-    const defaultLng = userLocation?.lng || 76.5851;
-
-    if (!mapRef.current) {
-      const map = L.map(mapContainerRef.current).setView([defaultLat, defaultLng], 11);
-
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap contributors',
-        maxZoom: 19,
-      }).addTo(map);
-
-      // Handle user clicking anywhere on the map
-      map.on('click', (e) => {
-        const { lat, lng } = e.latlng;
-        const newCoords = {
-          lat: parseFloat(lat.toFixed(6)),
-          lng: parseFloat(lng.toFixed(6)),
-        };
-        setUserLocation(newCoords);
-        setLocationStatus(`Showing incidents within 15 km of pinned map spot.`);
-      });
-
-      mapRef.current = map;
-    }
-
-    const map = mapRef.current;
-
-    // Render/update the visible blue point pin on click
-    if (userLocation) {
-      const pos = [userLocation.lat, userLocation.lng];
-
-      if (centerMarkerRef.current) {
-        centerMarkerRef.current.setLatLng(pos);
-      } else {
-        centerMarkerRef.current = L.marker(pos, {
-          icon: customBluePinIcon,
-          draggable: true,
-        }).addTo(map);
-
-        centerMarkerRef.current.bindPopup('<b>Selected Location Spot</b>').openPopup();
-
-        centerMarkerRef.current.on('dragend', (event) => {
-          const newPos = event.target.getLatLng();
-          const newCoords = {
-            lat: parseFloat(newPos.lat.toFixed(6)),
-            lng: parseFloat(newPos.lng.toFixed(6)),
-          };
-          setUserLocation(newCoords);
-          setLocationStatus(`Showing incidents within 15 km of pinned map spot.`);
-        });
-      }
-
-      map.setView(pos, 11);
-    }
-  }, [userLocation]);
-
-  useEffect(() => {
-    return () => {
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
-    };
-  }, []);
-
-  // 4. Filter Incidents by 15 km Radius
-  useEffect(() => {
-    if (!incidents.length) {
-      setNearbyIncidents([]);
-      return;
-    }
-
-    if (!userLocation) {
-      setNearbyIncidents(incidents);
-      return;
-    }
-
-    const filtered = incidents
-      .map((inc) => {
-        const coords = inc.location?.coordinates;
-        if (!coords || coords.length < 2) return null;
-
-        const distance = getDistanceKm(
-          userLocation.lat,
-          userLocation.lng,
-          coords[1],
-          coords[0]
-        );
-
-        return { ...inc, distanceKm: distance };
-      })
-      .filter((inc) => inc && inc.distanceKm <= 15)
-      .sort((a, b) => a.distanceKm - b.distanceKm);
-
-    setNearbyIncidents(filtered);
-
-    if (mapRef.current) {
-      incidentMarkersRef.current.forEach((m) => m.remove());
-      incidentMarkersRef.current = [];
-
-      filtered.forEach((inc) => {
-        const coords = inc.location?.coordinates;
-        if (coords && coords.length >= 2) {
-          const marker = L.circleMarker([coords[1], coords[0]], {
-            radius: 8,
-            fillColor: '#ef4444',
-            color: '#ffffff',
-            weight: 2,
-            opacity: 1,
-            fillOpacity: 0.8,
-          }).addTo(mapRef.current);
-
-          marker.bindPopup(
-            `<b>${inc.title || inc.type || 'Hazard Report'}</b><br/>${inc.distanceKm.toFixed(1)} km away`
-          );
-          incidentMarkersRef.current.push(marker);
-        }
-      });
-    }
-  }, [incidents, userLocation]);
-
-  // 5. Handle Proof Photo Upload & Incident Resolution
-  const handleResolveIncident = async (incidentId) => {
-    if (!proofFile) {
-      alert('Please select a proof image showing the resolved incident.');
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append('proof_image', proofFile);
-
-    try {
-      setResolvingLoading(true);
-      await API.post(`/incidents/resolve/${incidentId}`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-
-      alert('Incident successfully resolved and deleted from database!');
-      setResolvingId(null);
-      setProofFile(null);
-
-      setIncidents((prev) => prev.filter((item) => (item._id || item.id) !== incidentId));
-    } catch (err) {
-      console.error('Failed to resolve incident:', err);
-      alert(err.response?.data?.message || 'Error resolving incident. Please try again.');
-    } finally {
-      setResolvingLoading(false);
-    }
-  };
-
   const formatDateTime = (rawDate) => {
     if (!rawDate) return 'Recently';
+
     const dateObj = new Date(rawDate);
-    if (isNaN(dateObj.getTime())) return 'Recently';
+
+    if (Number.isNaN(dateObj.getTime())) return 'Recently';
 
     return `${dateObj.toLocaleDateString('en-IN', {
       day: '2-digit',
@@ -323,9 +78,372 @@ export default function Alerts() {
     })}`;
   };
 
+  const fetchAddressName = async (incident) => {
+    const id = incident._id || incident.id;
+
+    // New incidents already have the address saved in MongoDB.
+    if (incident.location_name) {
+      setAddressMap((previous) => ({
+        ...previous,
+        [id]: incident.location_name,
+      }));
+      return;
+    }
+
+    const coordinates = incident.location?.coordinates;
+
+    if (!coordinates || coordinates.length < 2) return;
+
+    const lat = coordinates[1];
+    const lon = coordinates[0];
+
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`
+      );
+
+      const data = await response.json();
+
+      if (data?.address) {
+        const {
+          city,
+          town,
+          village,
+          suburb,
+          neighbourhood,
+          county,
+          state_district,
+        } = data.address;
+
+        const area =
+          suburb ||
+          neighbourhood ||
+          city ||
+          town ||
+          village ||
+          county ||
+          state_district ||
+          'Unknown Area';
+
+        const cityName = city || town || village || state_district || '';
+
+        const displayName =
+          cityName && area !== cityName ? `${area}, ${cityName}` : area;
+
+        setAddressMap((previous) => ({
+          ...previous,
+          [id]: displayName,
+        }));
+      }
+    } catch (error) {
+      console.warn('Could not retrieve location address:', error);
+    }
+  };
+
+  const fetchIncidents = () => {
+    setLoading(true);
+
+    API.get('/incidents/verified')
+      .then((response) => {
+        const data = response.data.data || [];
+
+        setIncidents(data);
+        data.forEach((incident) => fetchAddressName(incident));
+      })
+      .catch((error) => {
+        console.error('Failed to load incidents:', error);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  };
+
+  useEffect(() => {
+    fetchIncidents();
+  }, []);
+
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setLocationStatus(
+        'Location is unavailable. Click the map to choose an area.'
+      );
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setUserLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        });
+
+        setLocationStatus(
+          'Showing incidents within 15 km of your location.'
+        );
+      },
+      () => {
+        setLocationStatus(
+          'Location access denied. Click the map to choose an area.'
+        );
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+      }
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!mapContainerRef.current) return;
+
+    const defaultLat = userLocation?.lat || 12.3712;
+    const defaultLng = userLocation?.lng || 76.5851;
+
+    if (!mapRef.current) {
+      const map = L.map(mapContainerRef.current).setView(
+        [defaultLat, defaultLng],
+        11
+      );
+
+      L.tileLayer(
+        'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        {
+          attribution: '&copy; OpenStreetMap contributors',
+          maxZoom: 19,
+        }
+      ).addTo(map);
+
+      map.on('click', (event) => {
+        const { lat, lng } = event.latlng;
+
+        setUserLocation({
+          lat: Number(lat.toFixed(6)),
+          lng: Number(lng.toFixed(6)),
+        });
+
+        setLocationStatus(
+          'Showing incidents within 15 km of the selected map point.'
+        );
+      });
+
+      mapRef.current = map;
+    }
+
+    const map = mapRef.current;
+
+    if (userLocation) {
+      const position = [userLocation.lat, userLocation.lng];
+
+      if (centerMarkerRef.current) {
+        centerMarkerRef.current.setLatLng(position);
+      } else {
+        centerMarkerRef.current = L.marker(position, {
+          icon: customBluePinIcon,
+          draggable: true,
+        }).addTo(map);
+
+        centerMarkerRef.current.bindPopup(
+          '<b>Selected Location</b>'
+        );
+
+        centerMarkerRef.current.on('dragend', (event) => {
+          const newPosition = event.target.getLatLng();
+
+          setUserLocation({
+            lat: Number(newPosition.lat.toFixed(6)),
+            lng: Number(newPosition.lng.toFixed(6)),
+          });
+
+          setLocationStatus(
+            'Showing incidents within 15 km of the selected map point.'
+          );
+        });
+      }
+
+      map.setView(position, 11);
+    }
+  }, [userLocation]);
+
+  useEffect(() => {
+    return () => {
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!incidents.length) {
+      setNearbyIncidents([]);
+      return;
+    }
+
+    if (!userLocation) {
+      setNearbyIncidents(incidents);
+      return;
+    }
+
+    const filteredIncidents = incidents
+      .map((incident) => {
+        const coordinates = incident.location?.coordinates;
+
+        if (!coordinates || coordinates.length < 2) return null;
+
+        const distance = getDistanceKm(
+          userLocation.lat,
+          userLocation.lng,
+          coordinates[1],
+          coordinates[0]
+        );
+
+        return {
+          ...incident,
+          distanceKm: distance,
+        };
+      })
+      .filter(
+        (incident) =>
+          incident &&
+          incident.distanceKm <= 15
+      )
+      .sort((first, second) => first.distanceKm - second.distanceKm);
+
+    setNearbyIncidents(filteredIncidents);
+
+    const map = mapRef.current;
+
+    if (!map) return;
+
+    Object.values(incidentMarkersRef.current).forEach((marker) => {
+      marker.remove();
+    });
+
+    incidentMarkersRef.current = {};
+
+    filteredIncidents.forEach((incident) => {
+      const incidentId = incident._id || incident.id;
+      const coordinates = incident.location?.coordinates;
+
+      if (!coordinates || coordinates.length < 2) return;
+
+      const marker = L.circleMarker(
+        [coordinates[1], coordinates[0]],
+        {
+          radius: 8,
+          fillColor: '#ef4444',
+          color: '#ffffff',
+          weight: 2,
+          opacity: 1,
+          fillOpacity: 0.8,
+        }
+      ).addTo(map);
+
+      marker.bindPopup(
+        `<b>${incident.type || 'Hazard Report'}</b><br/>` +
+        `${incident.distanceKm.toFixed(1)} km away`
+      );
+
+      incidentMarkersRef.current[incidentId] = marker;
+    });
+  }, [incidents, userLocation]);
+
+  // Clicking an address focuses the already visible Leaflet map.
+  const focusIncidentOnMap = (incident) => {
+    const incidentId = incident._id || incident.id;
+    const coordinates = incident.location?.coordinates;
+
+    if (!coordinates || coordinates.length < 2 || !mapRef.current) {
+      alert('Map location is unavailable for this incident.');
+      return;
+    }
+
+    const lat = coordinates[1];
+    const lng = coordinates[0];
+
+    mapRef.current.setView([lat, lng], 16, {
+      animate: true,
+    });
+
+    const marker = incidentMarkersRef.current[incidentId];
+
+    if (marker) {
+      marker.openPopup();
+    }
+
+    mapContainerRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    });
+  };
+
+  const handleResolveIncident = async (incidentId) => {
+    if (!proofFile) {
+      alert(
+        'Please select a clear proof image showing that the incident is resolved.'
+      );
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('proof_image', proofFile);
+
+    setResolvingLoading(true);
+
+    try {
+      const response = await API.post(
+        `/incidents/resolve/${incidentId}`,
+        formData,
+        {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        }
+      );
+
+      const result = response.data;
+
+      alert(
+        result.message ||
+        'Computer vision accepted the proof. Incident resolved.'
+      );
+
+      setResolvingId(null);
+      setProofFile(null);
+
+      // CV approved only: remove the now-resolved incident from active alerts.
+      if (result.resolved) {
+        setIncidents((previous) =>
+          previous.filter(
+            (incident) =>
+              (incident._id || incident.id) !== incidentId
+          )
+        );
+      }
+    } catch (error) {
+      const result = error.response?.data;
+
+      // CV rejected or uncertain image: keep incident active.
+      alert(
+        result?.message ||
+        'Computer vision could not verify this proof image.'
+      );
+
+      setProofFile(null);
+    } finally {
+      setResolvingLoading(false);
+    }
+  };
+
   return (
-    <div className="dashboard-page" style={{ padding: '2rem', maxWidth: '1000px', margin: '0 auto' }}>
-      {/* Header Banner */}
+    <div
+      className="dashboard-page"
+      style={{
+        padding: '2rem',
+        maxWidth: '1200px',
+        margin: '0 auto',
+      }}
+    >
       <section
         className="dashboard-intro"
         style={{
@@ -336,13 +454,26 @@ export default function Alerts() {
           border: '1px solid #1f2937',
         }}
       >
-        <h1 style={{ color: '#fff', margin: '0.5rem 0' }}>Emergency Alerts</h1>
-        <small style={{ color: '#6b7280', display: 'block', marginTop: '0.5rem' }}>
+        <h1
+          style={{
+            color: '#fff',
+            margin: '0.5rem 0',
+          }}
+        >
+          Emergency Alerts
+        </h1>
+
+        <small
+          style={{
+            color: '#6b7280',
+            display: 'block',
+            marginTop: '0.5rem',
+          }}
+        >
           {locationStatus}
         </small>
       </section>
 
-      {/* Interactive Map Section */}
       <section
         style={{
           backgroundColor: '#111827',
@@ -352,19 +483,40 @@ export default function Alerts() {
           border: '1px solid #1f2937',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-          <label style={{ color: '#fff', fontWeight: '600', fontSize: '0.95rem' }}>
-            📍 Interactive Filter Map (Click anywhere to search 15 km area surrounding that point):
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: '1rem',
+            marginBottom: '0.75rem',
+          }}
+        >
+          <label
+            style={{
+              color: '#fff',
+              fontWeight: '600',
+              fontSize: '0.95rem',
+            }}
+          >
+            📍 Interactive Filter Map (Click anywhere to search 15 km area):
           </label>
+
           {userLocation && (
             <button
               onClick={() => {
-                if (navigator.geolocation) {
-                  navigator.geolocation.getCurrentPosition((pos) => {
-                    setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-                    setLocationStatus('Showing incidents within 15 km of your location.');
-                  });
-                }
+                navigator.geolocation?.getCurrentPosition(
+                  (position) => {
+                    setUserLocation({
+                      lat: position.coords.latitude,
+                      lng: position.coords.longitude,
+                    });
+
+                    setLocationStatus(
+                      'Showing incidents within 15 km of your location.'
+                    );
+                  }
+                );
               }}
               style={{
                 backgroundColor: '#374151',
@@ -374,12 +526,14 @@ export default function Alerts() {
                 borderRadius: '4px',
                 cursor: 'pointer',
                 fontSize: '0.8rem',
+                whiteSpace: 'nowrap',
               }}
             >
               Reset to Current Location
             </button>
           )}
         </div>
+
         <div
           ref={mapContainerRef}
           style={{
@@ -391,7 +545,6 @@ export default function Alerts() {
         />
       </section>
 
-      {/* Dynamic Nearby Incidents Section */}
       <section
         className="dashboard-section"
         style={{
@@ -401,34 +554,52 @@ export default function Alerts() {
           border: '1px solid #1f2937',
         }}
       >
-        <h2 style={{ color: '#fff', marginBottom: '1rem' }}>
+        <h2
+          style={{
+            color: '#fff',
+            marginBottom: '1rem',
+          }}
+        >
           Nearby Reported Incidents ({nearbyIncidents.length})
         </h2>
 
         {loading ? (
-          <p style={{ color: '#9ca3af' }}>Loading live incident reports...</p>
+          <p style={{ color: '#9ca3af' }}>
+            Loading live incident reports...
+          </p>
         ) : nearbyIncidents.length === 0 ? (
-          <p style={{ color: '#53b889' }}>No severe incidents reported within 15 km of your selected location.</p>
+          <p style={{ color: '#53b889' }}>
+            No severe incidents reported within 15 km of your selected location.
+          </p>
         ) : (
-          <div style={{ display: 'grid', gap: '1rem' }}>
+          <div
+            style={{
+              display: 'grid',
+              gap: '1rem',
+            }}
+          >
             {nearbyIncidents.map((incident) => {
               const incidentId = incident._id || incident.id;
+
               const borderLeftColor =
-                incident.severity === 'high' || incident.type?.toLowerCase().includes('flood')
+                incident.severity === 'High' ||
+                incident.type?.toLowerCase().includes('flood')
                   ? '#ef6a55'
-                  : incident.severity === 'medium'
-                  ? '#e6b84b'
-                  : '#2574e8';
+                  : incident.severity === 'Medium'
+                    ? '#e6b84b'
+                    : '#2574e8';
 
-              let imageSrc = null;
-              if (incident.image_url) {
-                imageSrc = incident.image_url.startsWith('http')
+              const imageSrc = incident.image_url
+                ? incident.image_url.startsWith('http')
                   ? incident.image_url
-                  : `${BACKEND_BASE_URL}/${incident.image_url}`;
-              }
+                  : `${BACKEND_BASE_URL}/${incident.image_url}`
+                : null;
 
-              const placeName = addressMap[incidentId];
-              const locationDisplay = placeName || incident.address || 'Mysuru District';
+              const locationDisplay =
+                addressMap[incidentId] ||
+                incident.location_name ||
+                incident.address ||
+                'Location unavailable';
 
               return (
                 <div
@@ -443,7 +614,13 @@ export default function Alerts() {
                     gap: '1rem',
                   }}
                 >
-                  <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: '1.25rem',
+                      flexWrap: 'wrap',
+                    }}
+                  >
                     {imageSrc && (
                       <div
                         style={{
@@ -459,19 +636,41 @@ export default function Alerts() {
                         <img
                           src={imageSrc}
                           alt={incident.type || 'Incident'}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                          onError={(e) => {
-                            e.target.style.display = 'none';
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                          }}
+                          onError={(event) => {
+                            event.target.style.display = 'none';
                           }}
                         />
                       </div>
                     )}
 
-                    <div style={{ flex: 1, minWidth: '240px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <h3 style={{ color: '#fff', margin: 0 }}>
-                          {incident.title || incident.type || 'Hazard Report'}
+                    <div
+                      style={{
+                        flex: 1,
+                        minWidth: '240px',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: '1rem',
+                        }}
+                      >
+                        <h3
+                          style={{
+                            color: '#fff',
+                            margin: 0,
+                          }}
+                        >
+                          {incident.type || 'Hazard Report'}
                         </h3>
+
                         {incident.distanceKm !== undefined && (
                           <span
                             style={{
@@ -480,6 +679,7 @@ export default function Alerts() {
                               padding: '0.2rem 0.6rem',
                               borderRadius: '4px',
                               fontSize: '0.85rem',
+                              whiteSpace: 'nowrap',
                             }}
                           >
                             {incident.distanceKm.toFixed(1)} km away
@@ -487,14 +687,21 @@ export default function Alerts() {
                         )}
                       </div>
 
-                      <p style={{ color: '#d1d5db', margin: '0.5rem 0' }}>
-                        {incident.description || 'Verified citizen incident report near your area.'}
+                      <p
+                        style={{
+                          color: '#d1d5db',
+                          margin: '0.5rem 0',
+                        }}
+                      >
+                        {incident.description ||
+                          'Verified citizen incident report near your area.'}
                       </p>
 
                       <div
                         style={{
                           display: 'grid',
-                          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                          gridTemplateColumns:
+                            'repeat(auto-fit, minmax(180px, 1fr))',
                           gap: '0.5rem',
                           marginTop: '0.75rem',
                           fontSize: '0.85rem',
@@ -504,21 +711,62 @@ export default function Alerts() {
                         }}
                       >
                         <div>
-                          <strong style={{ color: '#e5e7eb' }}>📍 Location:</strong> {locationDisplay}
+                          <strong style={{ color: '#e5e7eb' }}>
+                            📍 Location:
+                          </strong>{' '}
+
+                          <button
+                            type="button"
+                            onClick={() => focusIncidentOnMap(incident)}
+                            title="Show this incident on the map"
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              padding: 0,
+                              color: '#93c5fd',
+                              cursor: 'pointer',
+                              textDecoration: 'underline',
+                              fontSize: '0.85rem',
+                            }}
+                          >
+                            {locationDisplay}
+                          </button>
                         </div>
+
                         <div>
-                          <strong style={{ color: '#e5e7eb' }}>📅 Date & Time:</strong>{' '}
-                          {formatDateTime(incident.created_at || incident.createdAt)}
+                          <strong style={{ color: '#e5e7eb' }}>
+                            📅 Date & Time:
+                          </strong>{' '}
+                          {formatDateTime(
+                            incident.created_at || incident.createdAt
+                          )}
                         </div>
+
                         <div>
-                          <strong style={{ color: '#e5e7eb' }}>⚡ Status:</strong>{' '}
-                          <span style={{ color: '#f59e0b', fontWeight: '600' }}>Active / Unresolved</span>
+                          <strong style={{ color: '#e5e7eb' }}>
+                            ⚡ Status:
+                          </strong>{' '}
+                          <span
+                            style={{
+                              color: '#f59e0b',
+                              fontWeight: '600',
+                            }}
+                          >
+                            Active / Unresolved
+                          </span>
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #2d3748', paddingTop: '0.75rem' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'flex-end',
+                      borderTop: '1px solid #2d3748',
+                      paddingTop: '0.75rem',
+                    }}
+                  >
                     {resolvingId === incidentId ? (
                       <div
                         style={{
@@ -530,20 +778,41 @@ export default function Alerts() {
                           flexDirection: 'column',
                           gap: '0.5rem',
                           width: '100%',
-                          maxWidth: '380px',
+                          maxWidth: '420px',
                         }}
                       >
-                        <label style={{ color: '#d1d5db', fontSize: '0.85rem', fontWeight: '500' }}>
-                          Upload Proof Photo of Resolved Hazard:
+                        <label
+                          style={{
+                            color: '#d1d5db',
+                            fontSize: '0.85rem',
+                            fontWeight: '500',
+                          }}
+                        >
+                          Upload a clear proof image of the resolved hazard.
                         </label>
+
                         <input
                           type="file"
-                          accept="image/*"
-                          onChange={(e) => setProofFile(e.target.files[0])}
-                          style={{ color: '#9ca3af', fontSize: '0.8rem' }}
+                          accept="image/png,image/jpeg,image/webp"
+                          onChange={(event) => {
+                            setProofFile(event.target.files[0]);
+                          }}
+                          style={{
+                            color: '#9ca3af',
+                            fontSize: '0.8rem',
+                          }}
                         />
-                        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
+
+                        <div
+                          style={{
+                            display: 'flex',
+                            gap: '0.5rem',
+                            justifyContent: 'flex-end',
+                            marginTop: '0.25rem',
+                          }}
+                        >
                           <button
+                            type="button"
                             onClick={() => {
                               setResolvingId(null);
                               setProofFile(null);
@@ -560,7 +829,9 @@ export default function Alerts() {
                           >
                             Cancel
                           </button>
+
                           <button
+                            type="button"
                             onClick={() => handleResolveIncident(incidentId)}
                             disabled={resolvingLoading}
                             style={{
@@ -572,15 +843,22 @@ export default function Alerts() {
                               cursor: 'pointer',
                               fontSize: '0.8rem',
                               fontWeight: 'bold',
+                              opacity: resolvingLoading ? 0.6 : 1,
                             }}
                           >
-                            {resolvingLoading ? 'Resolving...' : 'Confirm & Mark Resolved'}
+                            {resolvingLoading
+                              ? 'Checking with CV...'
+                              : 'Upload & Verify Proof'}
                           </button>
                         </div>
                       </div>
                     ) : (
                       <button
-                        onClick={() => setResolvingId(incidentId)}
+                        type="button"
+                        onClick={() => {
+                          setResolvingId(incidentId);
+                          setProofFile(null);
+                        }}
                         style={{
                           backgroundColor: '#059669',
                           color: '#fff',
@@ -590,12 +868,9 @@ export default function Alerts() {
                           cursor: 'pointer',
                           fontWeight: '600',
                           fontSize: '0.85rem',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.4rem',
                         }}
                       >
-                        <span>✓</span> Mark as Resolved & Upload Proof
+                        ✓ Mark as Resolved & Upload Proof
                       </button>
                     )}
                   </div>
