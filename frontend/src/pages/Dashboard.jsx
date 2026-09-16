@@ -56,10 +56,9 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
       Math.sin(dLon / 2) *
       Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return (R * c).toFixed(1);
+  return (R * c).toFixed(3);
 }
 
-// Safe reverse geocoding with fallback to prevent API batch failures
 async function fetchFullAddress(lat, lng) {
   if (!lat || !lng) return 'Coordinates unavailable';
   try {
@@ -330,20 +329,40 @@ export default function Dashboard() {
     });
   }, []);
 
-  const checkRouteHasHazards = (geometryCoordinates, hazardsList) => {
+  const distanceToSegmentKm = (pLat, pLng, aLat, aLng, bLat, bLng) => {
+    const dAB = parseFloat(calculateDistance(aLat, aLng, bLat, bLng));
+    if (dAB === 0) return parseFloat(calculateDistance(pLat, pLng, aLat, aLng));
+
+    const t = Math.max(
+      0,
+      Math.min(
+        1,
+        ((pLat - aLat) * (bLat - aLat) + (pLng - aLng) * (bLng - aLng)) /
+          ((bLat - aLat) ** 2 + (bLng - aLng) ** 2 || 1)
+      )
+    );
+
+    const projLat = aLat + t * (bLat - aLat);
+    const projLng = aLng + t * (bLng - aLng);
+    return parseFloat(calculateDistance(pLat, pLng, projLat, projLng));
+  };
+
+  const checkRouteHasHazards = (geometryCoordinates, hazardsList, safetyRadiusKm = 3.0) => {
     let breachCount = 0;
     let minDistanceToHazard = Infinity;
 
-    for (let coord of geometryCoordinates) {
-      const routeLng = coord[0];
-      const routeLat = coord[1];
+    for (let i = 0; i < geometryCoordinates.length - 1; i++) {
+      const aLng = geometryCoordinates[i][0];
+      const aLat = geometryCoordinates[i][1];
+      const bLng = geometryCoordinates[i + 1][0];
+      const bLat = geometryCoordinates[i + 1][1];
 
       for (let hazard of hazardsList) {
-        const dist = parseFloat(calculateDistance(routeLat, routeLng, hazard.lat, hazard.lng));
+        const dist = distanceToSegmentKm(hazard.lat, hazard.lng, aLat, aLng, bLat, bLng);
         if (dist < minDistanceToHazard) {
           minDistanceToHazard = dist;
         }
-        if (dist < 0.3) {
+        if (dist < safetyRadiusKm) {
           breachCount++;
         }
       }
@@ -367,57 +386,89 @@ export default function Dashboard() {
     try {
       const hazards = incidents
         .map((inc) => {
-          const typeStr = (inc.type || inc.description || inc.title || '').toLowerCase();
-          const isFlood = typeStr.includes('flood') || typeStr.includes('water');
           let coords = inc.location?.coordinates;
-
           if (Array.isArray(coords) && coords.length === 2) {
-            return { lat: coords[1], lng: coords[0], isFlood };
+            return { lat: coords[1], lng: coords[0] };
           } else if (inc.lat && (inc.lng || inc.lon)) {
-            return { lat: inc.lat, lng: inc.lng || inc.lon, isFlood };
+            return { lat: parseFloat(inc.lat), lng: parseFloat(inc.lng || inc.lon) };
           }
           return null;
         })
         .filter(Boolean);
 
-      const osrmBaseUrl = `https://router.project-osrm.org/route/v1/driving/${userCoords.lng},${userCoords.lat};${destLng},${destLat}?overview=full&geometries=geojson&alternatives=true`;
+      const straightDist = parseFloat(calculateDistance(userCoords.lat, userCoords.lng, destLat, destLng));
+      const targetRadiusKm = Math.min(3.0, Math.max(0.3, straightDist * 0.45));
+
+      const osrmBaseUrl = `https://router.project-osrm.org/route/v1/driving/${userCoords.lng},${userCoords.lat};${destLng},${destLat}?overview=full&geometries=geojson&alternatives=true&steps=true&continue_straight=true`;
       const res = await fetch(osrmBaseUrl);
       const data = await res.json();
 
-      if (!data.routes || data.routes.length === 0) {
-        setIsCalculatingRoute(false);
-        return;
-      }
+      let candidateRoutes = data.routes && data.routes.length > 0 ? [...data.routes] : [];
 
-      let bestRoute = null;
+      const relevantHazards = hazards.filter((h) => {
+        const dUser = parseFloat(calculateDistance(userCoords.lat, userCoords.lng, h.lat, h.lng));
+        const dDest = parseFloat(calculateDistance(destLat, destLng, h.lat, h.lng));
+        return dUser + dDest <= straightDist * 2.5 + 4.0;
+      });
 
-      for (let route of data.routes) {
-        const evaluation = checkRouteHasHazards(route.geometry.coordinates, hazards);
-        if (!evaluation.hasConflict) {
-          bestRoute = route;
-          break;
-        }
-      }
+      if (relevantHazards.length > 0) {
+        const angles = [0, 45, 90, 135, 180, 225, 270, 315];
+        const pushDistances = [targetRadiusKm * 1.1, targetRadiusKm * 1.6];
 
-      if (!bestRoute) {
-        let lowestBreaches = Infinity;
+        for (let h of relevantHazards) {
+          for (let distKm of pushDistances) {
+            for (let angle of angles) {
+              const rad = (angle * Math.PI) / 180;
+              const dLat = (distKm / 111.32) * Math.cos(rad);
+              const dLng = (distKm / (111.32 * Math.cos((h.lat * Math.PI) / 180))) * Math.sin(rad);
 
-        for (let route of data.routes) {
-          const evalResult = checkRouteHasHazards(route.geometry.coordinates, hazards);
-          if (evalResult.breachCount < lowestBreaches) {
-            lowestBreaches = evalResult.breachCount;
-            bestRoute = route;
+              const wpLat = h.lat + dLat;
+              const wpLng = h.lng + dLng;
+
+              const wpClear = hazards.every(
+                (otherH) => parseFloat(calculateDistance(wpLat, wpLng, otherH.lat, otherH.lng)) >= targetRadiusKm * 0.9
+              );
+
+              if (wpClear) {
+                try {
+                  const detourUrl = `https://router.project-osrm.org/route/v1/driving/${userCoords.lng},${userCoords.lat};${wpLng},${wpLat};${destLng},${destLat}?overview=full&geometries=geojson`;
+                  const dRes = await fetch(detourUrl);
+                  const dData = await dRes.json();
+                  if (dData.routes && dData.routes[0]) {
+                    candidateRoutes.push(dData.routes[0]);
+                  }
+                } catch (e) {}
+              }
+            }
           }
         }
       }
 
-      if (!bestRoute) {
-        bestRoute = data.routes[0];
+      if (candidateRoutes.length === 0) {
+        setIsCalculatingRoute(false);
+        return;
       }
 
-      const routeDistanceKm = bestRoute.distance / 1000;
-      if (routeDistanceKm > 25) {
-        bestRoute = data.routes[0];
+      const completelySafeRoutes = candidateRoutes.filter((route) => {
+        const evaluation = checkRouteHasHazards(route.geometry.coordinates, hazards, targetRadiusKm);
+        return !evaluation.hasConflict;
+      });
+
+      let bestRoute = null;
+
+      if (completelySafeRoutes.length > 0) {
+        bestRoute = completelySafeRoutes.reduce((shortest, r) => (r.distance < shortest.distance ? r : shortest));
+      } else {
+        bestRoute = candidateRoutes.reduce((safest, r) => {
+          const evalR = checkRouteHasHazards(r.geometry.coordinates, hazards, targetRadiusKm);
+          const evalSafest = checkRouteHasHazards(safest.geometry.coordinates, hazards, targetRadiusKm);
+
+          if (evalR.breachCount < evalSafest.breachCount) return r;
+          if (evalR.breachCount === evalSafest.breachCount && evalR.minDistanceToHazard > evalSafest.minDistanceToHazard) {
+            return r;
+          }
+          return safest;
+        });
       }
 
       setSafeRoute({
@@ -426,7 +477,7 @@ export default function Dashboard() {
         duration: Math.round(bestRoute.duration / 60),
       });
     } catch (err) {
-      console.error('Error calculating route:', err);
+      console.error('Error calculating safe route:', err);
     } finally {
       setIsCalculatingRoute(false);
     }
@@ -501,7 +552,6 @@ export default function Dashboard() {
       const response = await API.post('/predict-shelters-risk', { lat, lng }, { signal: controller.signal });
       const rawShelters = response.data.data || response.data || [];
 
-      // Process basic shelter data synchronous first to avoid promise rejections
       const mappedShelters = rawShelters.map((s, idx) => {
         const shelterLat = parseFloat(s.lat || s.latitude);
         const shelterLng = parseFloat(s.lon || s.lng || s.longitude);
@@ -557,7 +607,6 @@ export default function Dashboard() {
         };
       });
 
-      // Filter within 50 km buffer (to capture local & citizen centers accurately)
       const validShelters = mappedShelters
         .filter((s) => !isNaN(s.distNum) && s.distNum <= 50.0)
         .sort((a, b) => {
@@ -571,7 +620,6 @@ export default function Dashboard() {
         setSelectedShelter(validShelters[0]);
       }
 
-      // Geocode reverse addresses in background gracefully without blocking rendering
       validShelters.forEach(async (shelterItem) => {
         if (!shelterItem.full_address || shelterItem.full_address.includes(',')) {
           const detailedAddr = await fetchFullAddress(shelterItem.lat, shelterItem.lng);
