@@ -1,0 +1,464 @@
+[
+  {
+    "alpha": 0.05,
+    "target_coverage": 0.95,
+    "actual_coverage": 0.9525,
+    "coverage_gap": 0.0025,
+    "avg_set_size": 0.962,
+    "single_label_accuracy": 0.9896,
+    "base_accuracy": 0.9825,
+    "base_f1_weighted": 0.9825,
+    "class_conditional_coverage": {
+      "0": 0.9588,
+      "1": 0.9633,
+      "2": 0.9176
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "XGBoost",
+    "method": "standard"
+  },
+  {
+    "alpha": 0.05,
+    "target_coverage": 0.95,
+    "actual_coverage": 0.955,
+    "coverage_gap": 0.005,
+    "avg_set_size": 0.965,
+    "single_label_accuracy": 0.9896,
+    "base_accuracy": 0.9825,
+    "base_f1_weighted": 0.9825,
+    "class_conditional_coverage": {
+      "0": 0.9588,
+      "1": 0.9679,
+      "2": 0.9176
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "XGBoost",
+    "method": "aci"
+  },
+  {
+    "alpha": 0.1,
+    "target_coverage": 0.9,
+    "actual_coverage": 0.8925,
+    "coverage_gap": 0.0075,
+    "avg_set_size": 0.892,
+    "single_label_accuracy": 1.0,
+    "base_accuracy": 0.9825,
+    "base_f1_weighted": 0.9825,
+    "class_conditional_coverage": {
+      "0": 0.866,
+      "1": 0.9174,
+      "2": 0.8588
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "XGBoost",
+    "method": "standard"
+  },
+  {
+    "alpha": 0.1,
+    "target_coverage": 0.9,
+    "actual_coverage": 0.9125,
+    "coverage_gap": 0.0125,
+    "avg_set_size": 0.912,
+    "single_label_accuracy": 1.0,
+    "base_accuracy": 0.9825,
+    "base_f1_weighted": 0.9825,
+    "class_conditional_coverage": {
+      "0": 0.8866,
+      "1": 0.9312,
+      "2": 0.8941
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "XGBoost",
+    "method": "aci"
+  },
+  {
+    "alpha": 0.2,
+    "target_coverage": 0.8,
+    "actual_coverage": 0.765,
+    "coverage_gap": 0.035,
+    "avg_set_size": 0.765,
+    "single_label_accuracy": 1.0,
+    "base_accuracy": 0.9825,
+    "base_f1_weighted": 0.9825,
+    "class_conditional_coverage": {
+      "0": 0.6701,
+      "1": 0.8349,
+      "2": 0.6941
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "XGBoost",
+    "method": "standard"
+  },
+  {
+    "alpha": 0.2,
+    "target_coverage": 0.8,
+    "actual_coverage": 0.91,
+    "coverage_gap": 0.11,
+    "avg_set_size": 0.912,
+    "single_label_accuracy": 0.9973,
+    "base_accuracy": 0.9825,
+    "base_f1_weighted": 0.9825,
+    "class_conditional_coverage": {
+      "0": 0.8763,
+      "1": 0.9312,
+      "2": 0.8941
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "XGBoost",
+    "method": "aci"
+  },
+  {
+    "alpha": 0.05,
+    "target_coverage": 0.95,
+    "actual_coverage": 0.96,
+    "coverage_gap": 0.01,
+    "avg_set_size": 0.968,
+    "single_label_accuracy": 0.9922,
+    "base_accuracy": 0.98,
+    "base_f1_weighted": 0.98,
+    "class_conditional_coverage": {
+      "0": 0.9485,
+      "1": 0.9633,
+      "2": 0.9647
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "RandomForest",
+    "method": "standard"
+  },
+  {
+    "alpha": 0.05,
+    "target_coverage": 0.95,
+    "actual_coverage": 0.985,
+    "coverage_gap": 0.035,
+    "avg_set_size": 1.042,
+    "single_label_accuracy": 0.9894,
+    "base_accuracy": 0.98,
+    "base_f1_weighted": 0.98,
+    "class_conditional_coverage": {
+      "0": 1.0,
+      "1": 0.9817,
+      "2": 0.9765
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "RandomForest",
+    "method": "aci"
+  },
+  {
+    "alpha": 0.1,
+    "target_coverage": 0.9,
+    "actual_coverage": 0.8925,
+    "coverage_gap": 0.0075,
+    "avg_set_size": 0.898,
+    "single_label_accuracy": 0.9944,
+    "base_accuracy": 0.98,
+    "base_f1_weighted": 0.98,
+    "class_conditional_coverage": {
+      "0": 0.8763,
+      "1": 0.9266,
+      "2": 0.8235
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "RandomForest",
+    "method": "standard"
+  },
+  {
+    "alpha": 0.1,
+    "target_coverage": 0.9,
+    "actual_coverage": 0.4175,
+    "coverage_gap": 0.4825,
+    "avg_set_size": 0.42,
+    "single_label_accuracy": 0.994,
+    "base_accuracy": 0.98,
+    "base_f1_weighted": 0.98,
+    "class_conditional_coverage": {
+      "0": 0.433,
+      "1": 0.422,
+      "2": 0.3882
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "RandomForest",
+    "method": "aci"
+  },
+  {
+    "alpha": 0.2,
+    "target_coverage": 0.8,
+    "actual_coverage": 0.7675,
+    "coverage_gap": 0.0325,
+    "avg_set_size": 0.77,
+    "single_label_accuracy": 0.9968,
+    "base_accuracy": 0.98,
+    "base_f1_weighted": 0.98,
+    "class_conditional_coverage": {
+      "0": 0.6392,
+      "1": 0.8349,
+      "2": 0.7412
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "RandomForest",
+    "method": "standard"
+  },
+  {
+    "alpha": 0.2,
+    "target_coverage": 0.8,
+    "actual_coverage": 0.3975,
+    "coverage_gap": 0.4025,
+    "avg_set_size": 0.4,
+    "single_label_accuracy": 0.9938,
+    "base_accuracy": 0.98,
+    "base_f1_weighted": 0.98,
+    "class_conditional_coverage": {
+      "0": 0.3918,
+      "1": 0.3991,
+      "2": 0.4
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "RandomForest",
+    "method": "aci"
+  },
+  {
+    "alpha": 0.05,
+    "target_coverage": 0.95,
+    "actual_coverage": 0.9625,
+    "coverage_gap": 0.0125,
+    "avg_set_size": 0.978,
+    "single_label_accuracy": 0.9847,
+    "base_accuracy": 0.975,
+    "base_f1_weighted": 0.9751,
+    "class_conditional_coverage": {
+      "0": 0.9588,
+      "1": 0.9541,
+      "2": 0.9882
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "GradientBoosting",
+    "method": "standard"
+  },
+  {
+    "alpha": 0.05,
+    "target_coverage": 0.95,
+    "actual_coverage": 0.965,
+    "coverage_gap": 0.015,
+    "avg_set_size": 0.988,
+    "single_label_accuracy": 0.9772,
+    "base_accuracy": 0.975,
+    "base_f1_weighted": 0.9751,
+    "class_conditional_coverage": {
+      "0": 0.9588,
+      "1": 0.9587,
+      "2": 0.9882
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "GradientBoosting",
+    "method": "aci"
+  },
+  {
+    "alpha": 0.1,
+    "target_coverage": 0.9,
+    "actual_coverage": 0.92,
+    "coverage_gap": 0.02,
+    "avg_set_size": 0.925,
+    "single_label_accuracy": 0.9946,
+    "base_accuracy": 0.975,
+    "base_f1_weighted": 0.9751,
+    "class_conditional_coverage": {
+      "0": 0.8557,
+      "1": 0.9312,
+      "2": 0.9647
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "GradientBoosting",
+    "method": "standard"
+  },
+  {
+    "alpha": 0.1,
+    "target_coverage": 0.9,
+    "actual_coverage": 0.945,
+    "coverage_gap": 0.045,
+    "avg_set_size": 0.955,
+    "single_label_accuracy": 0.9895,
+    "base_accuracy": 0.975,
+    "base_f1_weighted": 0.9751,
+    "class_conditional_coverage": {
+      "0": 0.9072,
+      "1": 0.945,
+      "2": 0.9882
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "GradientBoosting",
+    "method": "aci"
+  },
+  {
+    "alpha": 0.2,
+    "target_coverage": 0.8,
+    "actual_coverage": 0.78,
+    "coverage_gap": 0.02,
+    "avg_set_size": 0.78,
+    "single_label_accuracy": 1.0,
+    "base_accuracy": 0.975,
+    "base_f1_weighted": 0.9751,
+    "class_conditional_coverage": {
+      "0": 0.6392,
+      "1": 0.844,
+      "2": 0.7765
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "GradientBoosting",
+    "method": "standard"
+  },
+  {
+    "alpha": 0.2,
+    "target_coverage": 0.8,
+    "actual_coverage": 0.0025,
+    "coverage_gap": 0.7975,
+    "avg_set_size": 0.002,
+    "single_label_accuracy": 1.0,
+    "base_accuracy": 0.975,
+    "base_f1_weighted": 0.9751,
+    "class_conditional_coverage": {
+      "0": 0.0,
+      "1": 0.0046,
+      "2": 0.0
+    },
+    "n_test": 400,
+    "n_cal": 400,
+    "model": "GradientBoosting",
+    "method": "aci"
+  },
+  {
+    "alpha": 0.05,
+    "target_coverage": 0.95,
+    "actual_coverage": 0.9392,
+    "coverage_gap": 0.0108,
+    "avg_set_size": 0.996,
+    "single_label_accuracy": 0.9429,
+    "base_accuracy": 0.9411,
+    "base_f1_weighted": 0.9409,
+    "class_conditional_coverage": {
+      "0": 0.8927,
+      "1": 0.9688,
+      "2": 0.9206
+    },
+    "n_test": 1019,
+    "n_cal": 197,
+    "model": "XGBoost",
+    "method": "standard",
+    "scenario": "distribution_shift"
+  },
+  {
+    "alpha": 0.05,
+    "target_coverage": 0.95,
+    "actual_coverage": 0.9794,
+    "coverage_gap": 0.0294,
+    "avg_set_size": 1.251,
+    "single_label_accuracy": 0.9741,
+    "base_accuracy": 0.9411,
+    "base_f1_weighted": 0.9409,
+    "class_conditional_coverage": {
+      "0": 0.9579,
+      "1": 0.9926,
+      "2": 0.972
+    },
+    "n_test": 1019,
+    "n_cal": 197,
+    "model": "XGBoost",
+    "method": "aci",
+    "scenario": "distribution_shift"
+  },
+  {
+    "alpha": 0.1,
+    "target_coverage": 0.9,
+    "actual_coverage": 0.8302,
+    "coverage_gap": 0.0698,
+    "avg_set_size": 0.845,
+    "single_label_accuracy": 0.9826,
+    "base_accuracy": 0.9411,
+    "base_f1_weighted": 0.9409,
+    "class_conditional_coverage": {
+      "0": 0.705,
+      "1": 0.9026,
+      "2": 0.7991
+    },
+    "n_test": 1019,
+    "n_cal": 197,
+    "model": "XGBoost",
+    "method": "standard",
+    "scenario": "distribution_shift"
+  },
+  {
+    "alpha": 0.1,
+    "target_coverage": 0.9,
+    "actual_coverage": 0.1335,
+    "coverage_gap": 0.7665,
+    "avg_set_size": 0.135,
+    "single_label_accuracy": 0.9855,
+    "base_accuracy": 0.9411,
+    "base_f1_weighted": 0.9409,
+    "class_conditional_coverage": {
+      "0": 0.1303,
+      "1": 0.1379,
+      "2": 0.1262
+    },
+    "n_test": 1019,
+    "n_cal": 197,
+    "model": "XGBoost",
+    "method": "aci",
+    "scenario": "distribution_shift"
+  },
+  {
+    "alpha": 0.2,
+    "target_coverage": 0.8,
+    "actual_coverage": 0.7223,
+    "coverage_gap": 0.0777,
+    "avg_set_size": 0.725,
+    "single_label_accuracy": 0.9959,
+    "base_accuracy": 0.9411,
+    "base_f1_weighted": 0.9409,
+    "class_conditional_coverage": {
+      "0": 0.5824,
+      "1": 0.8051,
+      "2": 0.6822
+    },
+    "n_test": 1019,
+    "n_cal": 197,
+    "model": "XGBoost",
+    "method": "standard",
+    "scenario": "distribution_shift"
+  },
+  {
+    "alpha": 0.2,
+    "target_coverage": 0.8,
+    "actual_coverage": 0.0697,
+    "coverage_gap": 0.7303,
+    "avg_set_size": 0.07,
+    "single_label_accuracy": 1.0,
+    "base_accuracy": 0.9411,
+    "base_f1_weighted": 0.9409,
+    "class_conditional_coverage": {
+      "0": 0.0613,
+      "1": 0.079,
+      "2": 0.0561
+    },
+    "n_test": 1019,
+    "n_cal": 197,
+    "model": "XGBoost",
+    "method": "aci",
+    "scenario": "distribution_shift"
+  }
+]

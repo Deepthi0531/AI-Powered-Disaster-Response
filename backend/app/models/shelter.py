@@ -82,10 +82,25 @@ class Shelter(me.Document):
         else:
             available = max(0, total - (self.occupied_beds or 0))
 
-        # Format creation timestamp (Fixed: Avoid injecting new timestamp on serialization if missing)
-        formatted_created_at = (
-            self.created_at.isoformat() if self.created_at else None
-        )
+        # -------------------------------------------------------------
+        # FIXED TIMESTAMP EXTRACTION & ISO UTC FORMATTING
+        # -------------------------------------------------------------
+        created_dt = self.created_at
+        if not created_dt and self.id:
+            try:
+                # Extract creation time directly from MongoDB ObjectId
+                created_dt = self.id.generation_time
+            except AttributeError:
+                created_dt = None
+
+        formatted_created_at = None
+        if created_dt:
+            # Ensure ISO format string contains explicit UTC marker 'Z'
+            iso_str = created_dt.isoformat()
+            if not iso_str.endswith('Z') and '+' not in iso_str:
+                iso_str += 'Z'
+            formatted_created_at = iso_str
+        # -------------------------------------------------------------
 
         return {
             "id": str(self.id),

@@ -1,26 +1,102 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import API from '../api/axios';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
 
-const customBluePinIcon = L.divIcon({
-  className: 'custom-pin-marker',
-  html: `
-    <div style="position:relative;width:30px;height:30px;display:flex;align-items:center;justify-content:center;">
-      <div style="
-        position:absolute;width:18px;height:18px;background:#2563eb;
-        border:3px solid white;border-radius:50%;
-        box-shadow:0 0 10px rgba(37,99,235,.8);z-index:2;
-      "></div>
-      <div style="
-        position:absolute;width:32px;height:32px;background:rgba(37,99,235,.35);
-        border-radius:50%;z-index:1;
-      "></div>
+function AnimatedProbability({ label, value, color, delay }) {
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setWidth((value || 0) * 100), 100 + delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+
+  return (
+    <div style={{ marginBottom: '0.75rem', animationDelay: `${delay}ms` }} className="animate-fade-in-up">
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+        <span style={{ fontSize: '0.85rem', color: '#94a3b8' }}>{label}</span>
+        <span style={{ fontSize: '0.85rem', fontWeight: 700, color }}>
+          {((value || 0) * 100).toFixed(1)}%
+        </span>
+      </div>
+      <div className="probability-bar" style={{ height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden' }}>
+        <div
+          className="probability-bar-fill"
+          style={{ width: `${width}%`, height: '100%', background: color, transition: 'width 0.8s ease-out' }}
+        />
+      </div>
     </div>
-  `,
-  iconSize: [30, 30],
-  iconAnchor: [15, 15],
-});
+  );
+}
+
+function RiskBadge({ risk }) {
+  const level = risk?.toLowerCase() || 'low';
+  const colors = {
+    high: '#ef4444',
+    medium: '#f59e0b',
+    low: '#10b981',
+  };
+  const activeColor = colors[level] || '#10b981';
+
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '6px',
+        padding: '4px 12px',
+        borderRadius: '999px',
+        fontSize: '0.8rem',
+        fontWeight: 700,
+        backgroundColor: `${activeColor}20`,
+        color: activeColor,
+        border: `1px solid ${activeColor}40`,
+      }}
+    >
+      <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: activeColor }} />
+      {risk || 'Low'} Risk
+    </span>
+  );
+}
+
+function UncertaintyBadge({ probabilities }) {
+  if (!probabilities) return null;
+  const probs = Object.values(probabilities).filter((p) => typeof p === 'number');
+  if (probs.length === 0) return null;
+
+  const entropy = -probs.reduce((sum, p) => (p > 0 ? sum + p * Math.log2(p) : sum), 0);
+  const maxEntropy = Math.log2(probs.length || 1);
+  const normalizedEntropy = maxEntropy > 0 ? entropy / maxEntropy : 0;
+
+  let label = 'High Confidence';
+  let color = '#10b981';
+
+  if (normalizedEntropy >= 0.6) {
+    label = 'Low Confidence';
+    color = '#ef4444';
+  } else if (normalizedEntropy >= 0.3) {
+    label = 'Moderate Confidence';
+    color = '#f59e0b';
+  }
+
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '6px',
+        padding: '4px 12px',
+        borderRadius: '999px',
+        fontSize: '0.75rem',
+        background: `${color}15`,
+        color,
+        border: `1px solid ${color}40`,
+        fontWeight: 600,
+      }}
+    >
+      <span style={{ width: 6, height: 6, borderRadius: '50%', background: color }} />
+      {label}
+    </span>
+  );
+}
 
 export default function FloodPrediction() {
   const [formData, setFormData] = useState({
@@ -34,123 +110,20 @@ export default function FloodPrediction() {
   const [locationLoading, setLocationLoading] = useState(false);
   const [geocodingLoading, setGeocodingLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-
-  const mapContainerRef = useRef(null);
-  const mapRef = useRef(null);
-  const markerRef = useRef(null);
-
-  // Reverse Geocoding (Coordinates -> Address Name)
-  const fetchAddressName = async (lat, lon) => {
-    try {
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`
-      );
-      const data = await response.json();
-
-      if (data?.address) {
-        const { city, town, village, suburb, neighbourhood, county, state_district } = data.address;
-        const area = suburb || neighbourhood || city || town || village || county || state_district || '';
-        const cityName = city || town || village || state_district || '';
-        const displayName = cityName && area !== cityName && area !== '' ? `${area}, ${cityName}` : area || data.display_name || 'Selected Location';
-
-        setFormData((prev) => ({
-          ...prev,
-          location_name: displayName,
-        }));
-      }
-    } catch (error) {
-      console.warn('Reverse geocoding error:', error);
-    }
-  };
-
-  const updateCoordinatesOnMap = (lat, lng) => {
-    const position = [lat, lng];
-    if (mapRef.current) {
-      mapRef.current.setView(position, 12);
-
-      if (markerRef.current) {
-        markerRef.current.setLatLng(position);
-      } else {
-        markerRef.current = L.marker(position, {
-          icon: customBluePinIcon,
-          draggable: true,
-        }).addTo(mapRef.current);
-
-        markerRef.current.on('dragend', (event) => {
-          const newPos = event.target.getLatLng();
-          const formattedLat = newPos.lat.toFixed(6);
-          const formattedLng = newPos.lng.toFixed(6);
-          setFormData((prev) => ({
-            ...prev,
-            latitude: formattedLat,
-            longitude: formattedLng,
-          }));
-          fetchAddressName(formattedLat, formattedLng);
-        });
-      }
-    }
-  };
-
-  const updateCoordinates = (lat, lng) => {
-    const formattedLat = Number(lat).toFixed(6);
-    const formattedLng = Number(lng).toFixed(6);
-
-    setFormData((prev) => ({
-      ...prev,
-      latitude: formattedLat,
-      longitude: formattedLng,
-    }));
-
-    fetchAddressName(formattedLat, formattedLng);
-    updateCoordinatesOnMap(lat, lng);
-  };
-
-  useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) return;
-
-    const initialLat = 12.3712;
-    const initialLng = 76.5851;
-
-    const map = L.map(mapContainerRef.current).setView([initialLat, initialLng], 11);
-
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors',
-      maxZoom: 19,
-    }).addTo(map);
-
-    map.on('click', (e) => {
-      const { lat, lng } = e.latlng;
-      updateCoordinates(lat, lng);
-    });
-
-    mapRef.current = map;
-
-    return () => {
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
-    };
-  }, []);
+  const [showResult, setShowResult] = useState(false);
+  const resultRef = useRef(null);
 
   const handleChange = (e) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
-
-    if ((name === 'latitude' || name === 'longitude') && value) {
-      const updatedForm = { ...formData, [name]: value };
-      const lat = parseFloat(updatedForm.latitude);
-      const lng = parseFloat(updatedForm.longitude);
-
-      if (!isNaN(lat) && !isNaN(lng)) {
-        updateCoordinatesOnMap(lat, lng);
-      }
-    }
+    setFormData({
+      ...formData,
+      [e.target.name]: e.target.value,
+    });
   };
 
   const getCurrentLocation = () => {
     setErrorMessage('');
     setPrediction(null);
+    setShowResult(false);
     setLocationLoading(true);
 
     if (!navigator.geolocation) {
@@ -161,9 +134,11 @@ export default function FloodPrediction() {
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const lat = position.coords.latitude;
-        const lng = position.coords.longitude;
-        updateCoordinates(lat, lng);
+        setFormData((prev) => ({
+          ...prev,
+          latitude: position.coords.latitude.toFixed(6),
+          longitude: position.coords.longitude.toFixed(6),
+        }));
         setLocationLoading(false);
       },
       () => {
@@ -179,13 +154,13 @@ export default function FloodPrediction() {
     setLoading(true);
     setErrorMessage('');
     setPrediction(null);
+    setShowResult(false);
 
     let lat = formData.latitude ? Number(formData.latitude) : null;
     let lng = formData.longitude ? Number(formData.longitude) : null;
 
     try {
-      // Forward Geocoding: If only location name is provided, convert to lat/lng on the frontend first
-      if ((!lat || !lng) && formData.location_name.trim()) {
+      if ((!lat || !lng) && formData.location_name && formData.location_name.trim()) {
         setGeocodingLoading(true);
         const geoResponse = await fetch(
           `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
@@ -199,16 +174,11 @@ export default function FloodPrediction() {
           lat = parseFloat(geoData[0].lat);
           lng = parseFloat(geoData[0].lon);
 
-          const formattedLat = lat.toFixed(6);
-          const formattedLng = lng.toFixed(6);
-
-          // Automatically populate inputs and update map pin
           setFormData((prev) => ({
             ...prev,
-            latitude: formattedLat,
-            longitude: formattedLng,
+            latitude: lat.toFixed(6),
+            longitude: lng.toFixed(6),
           }));
-          updateCoordinatesOnMap(lat, lng);
         } else {
           setErrorMessage(`Could not find coordinates for "${formData.location_name}".`);
           setLoading(false);
@@ -216,23 +186,25 @@ export default function FloodPrediction() {
         }
       }
 
-      if (!lat || !lng) {
-        setErrorMessage('Please enter a location name or latitude and longitude.');
+      if (lat === null || lng === null || isNaN(lat) || isNaN(lng)) {
+        setErrorMessage('Please enter a valid location name or latitude and longitude.');
         setLoading(false);
         return;
       }
 
-      // Send exact latitude and longitude payload to backend
       const response = await API.post('/predict-flood', {
         latitude: lat,
         longitude: lng,
-        location_name: formData.location_name,
+        location_name: formData.location_name || '',
       });
 
-      setPrediction(response.data);
+      setPrediction(response.data?.data || response.data);
+      setShowResult(true);
     } catch (error) {
       setErrorMessage(
-        error.response?.data?.error || 'Failed to analyze risk. Ensure backend is running.'
+        error.response?.data?.error ||
+          error.response?.data?.message ||
+          'Failed to analyze risk. Ensure backend is running.'
       );
     } finally {
       setGeocodingLoading(false);
@@ -241,228 +213,240 @@ export default function FloodPrediction() {
   };
 
   return (
-    <div
-      className="dashboard-page"
-      style={{
-        padding: '2rem',
-        maxWidth: '1200px',
-        margin: '0 auto',
-      }}
-    >
-      <section
-        className="dashboard-intro"
-        style={{
-          backgroundColor: '#111827',
-          padding: '1.5rem',
-          borderRadius: '8px',
-          marginBottom: '1.5rem',
-          border: '1px solid #1f2937',
-        }}
-      >
+    <div className="dashboard-page">
+      <section className="dashboard-intro">
         <div>
-          <p className="eyebrow" style={{ color: '#9ca3af', fontSize: '0.85rem' }}>
-            ML RISK ASSESSMENT
-          </p>
-          <h1 style={{ color: '#fff', margin: '0.5rem 0' }}>
-            Flood Risk Prediction
-          </h1>
+          <p className="eyebrow">ML RISK ASSESSMENT</p>
+          <h1>Flood Risk Prediction</h1>
         </div>
       </section>
 
-      <section
-        style={{
-          backgroundColor: '#111827',
-          padding: '1rem',
-          borderRadius: '8px',
-          marginBottom: '1.5rem',
-          border: '1px solid #1f2937',
-        }}
-      >
-        <label
-          style={{
-            color: '#fff',
-            fontWeight: '600',
-            fontSize: '0.95rem',
-            display: 'block',
-            marginBottom: '0.75rem',
-          }}
-        >
-          📍 Select Location on Map (Click or Drag Marker):
-        </label>
-        <div
-          ref={mapContainerRef}
-          style={{
-            height: '350px',
-            width: '100%',
-            borderRadius: '6px',
-            overflow: 'hidden',
-          }}
-        />
-      </section>
+      <section className="dashboard-section">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '2rem', alignItems: 'start' }}>
+          <div style={{ maxWidth: '450px', width: '100%' }}>
+            <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '1rem' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#94a3b8' }}>
+                  Location Name (Optional)
+                </label>
+                <input
+                  type="text"
+                  name="location_name"
+                  value={formData.location_name}
+                  onChange={handleChange}
+                  placeholder="e.g. Mysuru or search area"
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(148, 163, 184, 0.2)',
+                    backgroundColor: '#0f172a',
+                    color: '#ffffff',
+                  }}
+                />
+              </div>
 
-      <section
-        className="dashboard-section"
-        style={{
-          backgroundColor: '#111827',
-          padding: '1.5rem',
-          borderRadius: '8px',
-          border: '1px solid #1f2937',
-        }}
-      >
-        <div style={{ maxWidth: '450px' }}>
-          <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '1rem' }}>
-            <div>
-              <label style={{ color: '#d1d5db', display: 'block', marginBottom: '0.4rem' }}>
-                Location / Area Name
-              </label>
-              <input
-                type="text"
-                name="location_name"
-                value={formData.location_name}
-                onChange={handleChange}
-                placeholder="Enter area (e.g. Vijayanagar)"
-                style={{
-                  width: '100%',
-                  padding: '0.6rem',
-                  backgroundColor: '#1f2937',
-                  border: '1px solid #374151',
-                  borderRadius: '4px',
-                  color: '#fff',
-                }}
-              />
-            </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#94a3b8' }}>
+                  Latitude
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  name="latitude"
+                  value={formData.latitude}
+                  onChange={handleChange}
+                  placeholder="Enter latitude"
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(148, 163, 184, 0.2)',
+                    backgroundColor: '#0f172a',
+                    color: '#ffffff',
+                  }}
+                />
+              </div>
 
-            <div>
-              <label style={{ color: '#d1d5db', display: 'block', marginBottom: '0.4rem' }}>
-                Latitude
-              </label>
-              <input
-                type="number"
-                step="any"
-                name="latitude"
-                value={formData.latitude}
-                onChange={handleChange}
-                placeholder="Auto-filled from location or map"
-                style={{
-                  width: '100%',
-                  padding: '0.6rem',
-                  backgroundColor: '#1f2937',
-                  border: '1px solid #374151',
-                  borderRadius: '4px',
-                  color: '#fff',
-                }}
-              />
-            </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#94a3b8' }}>
+                  Longitude
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  name="longitude"
+                  value={formData.longitude}
+                  onChange={handleChange}
+                  placeholder="Enter longitude"
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(148, 163, 184, 0.2)',
+                    backgroundColor: '#0f172a',
+                    color: '#ffffff',
+                  }}
+                />
+              </div>
 
-            <div>
-              <label style={{ color: '#d1d5db', display: 'block', marginBottom: '0.4rem' }}>
-                Longitude
-              </label>
-              <input
-                type="number"
-                step="any"
-                name="longitude"
-                value={formData.longitude}
-                onChange={handleChange}
-                placeholder="Auto-filled from location or map"
-                style={{
-                  width: '100%',
-                  padding: '0.6rem',
-                  backgroundColor: '#1f2937',
-                  border: '1px solid #374151',
-                  borderRadius: '4px',
-                  color: '#fff',
-                }}
-              />
-            </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={getCurrentLocation}
+                  disabled={locationLoading || loading || geocodingLoading}
+                  style={{
+                    flex: 1,
+                    padding: '10px',
+                    borderRadius: '8px',
+                    backgroundColor: '#1e293b',
+                    color: '#ffffff',
+                    border: '1px solid #334155',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {locationLoading ? 'Getting Location...' : 'Use Current Location'}
+                </button>
 
-            <button
-              type="button"
-              onClick={getCurrentLocation}
-              disabled={locationLoading || loading}
-              style={{
-                padding: '0.6rem',
-                backgroundColor: '#374151',
-                color: '#e5e7eb',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-              }}
-            >
-              {locationLoading ? 'Getting Location...' : 'Use Current Location'}
-            </button>
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={loading || locationLoading || geocodingLoading}
+                  style={{
+                    flex: 1,
+                    padding: '10px',
+                    borderRadius: '8px',
+                    backgroundColor: '#2563eb',
+                    color: '#ffffff',
+                    border: 'none',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {loading || geocodingLoading ? 'Processing Model...' : 'Calculate Flood Risk'}
+                </button>
+              </div>
+            </form>
 
-            <button
-              type="submit"
-              className="primary-button"
-              disabled={loading || locationLoading}
-              style={{
-                padding: '0.75rem',
-                backgroundColor: '#2563eb',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontWeight: '600',
-              }}
-            >
-              {geocodingLoading
-                ? 'Resolving Location...'
-                : loading
-                ? 'Processing Model...'
-                : 'Calculate Flood Risk'}
-            </button>
-          </form>
+            {errorMessage && (
+              <div className="animate-fade-in alert alert-error" style={{ marginTop: '1rem', color: '#ef4444', fontSize: '0.9rem' }}>
+                {errorMessage}
+              </div>
+            )}
 
-          {errorMessage && (
-            <div
-              style={{
-                marginTop: '1rem',
-                color: '#ef6a55',
-                fontWeight: 'bold',
-              }}
-            >
-              {errorMessage}
-            </div>
-          )}
-
-          {prediction && (
-            <div
-              style={{
-                marginTop: '1.5rem',
-                padding: '1rem',
-                backgroundColor: '#1f2937',
-                borderRadius: '6px',
-                border: '1px solid #2574e8',
-                color: '#fff',
-              }}
-            >
-              {formData.location_name && (
-                <p style={{ marginTop: 0, color: '#93c5fd', fontWeight: 'bold' }}>
-                  📍 {formData.location_name}
-                </p>
-              )}
-
-              <h2 style={{ marginTop: formData.location_name ? '0.5rem' : 0 }}>
-                Flood Risk: {prediction.risk_level}
-              </h2>
-
-              <p>
-                <strong>Low Probability:</strong>{' '}
-                {(prediction.low_probability * 100).toFixed(2)}%
+            <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid rgba(148,163,184,0.1)' }}>
+              <p style={{ margin: '0 0 0.75rem', fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>
+                QUICK LOCATIONS
               </p>
-
-              <p>
-                <strong>Medium Probability:</strong>{' '}
-                {(prediction.medium_probability * 100).toFixed(2)}%
-              </p>
-
-              <p style={{ marginBottom: 0 }}>
-                <strong>High Probability:</strong>{' '}
-                {(prediction.high_probability * 100).toFixed(2)}%
-              </p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {[
+                  { name: 'Kathmandu', lat: 27.7172, lng: 85.324 },
+                  { name: 'Pokhara', lat: 28.2096, lng: 83.9856 },
+                  { name: 'Chitwan', lat: 27.5291, lng: 84.3542 },
+                  { name: 'Biratnagar', lat: 26.4525, lng: 87.2718 },
+                ].map((loc) => (
+                  <button
+                    key={loc.name}
+                    type="button"
+                    onClick={() => {
+                      setFormData({ latitude: String(loc.lat), longitude: String(loc.lng), location_name: loc.name });
+                      setPrediction(null);
+                      setShowResult(false);
+                    }}
+                    style={{
+                      padding: '5px 12px',
+                      borderRadius: '8px',
+                      fontSize: '0.78rem',
+                      border: '1px solid rgba(148,163,184,0.15)',
+                      background: 'rgba(255,255,255,0.03)',
+                      color: '#94a3b8',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {loc.name}
+                  </button>
+                ))}
+              </div>
             </div>
-          )}
+          </div>
+
+          <div ref={resultRef}>
+            {loading && (
+              <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
+                Running ML inference...
+              </div>
+            )}
+
+            {!loading && prediction && showResult && (
+              <div
+                style={{
+                  backgroundColor: '#0f172a',
+                  border: '1px solid rgba(148, 163, 184, 0.2)',
+                  borderRadius: '16px',
+                  padding: '1.5rem',
+                  maxWidth: '450px',
+                  width: '100%',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
+                  <div>
+                    <h2 style={{ margin: '0 0 0.25rem', fontSize: '1.25rem', color: '#ffffff' }}>Risk Assessment</h2>
+                    <p style={{ margin: 0, color: '#64748b', fontSize: '0.8rem' }}>
+                      {prediction.latitude ?? formData.latitude}, {prediction.longitude ?? formData.longitude}
+                    </p>
+                  </div>
+                  <RiskBadge risk={prediction.risk_level} />
+                </div>
+
+                <div style={{ marginBottom: '1.25rem' }}>
+                  <UncertaintyBadge
+                    probabilities={{
+                      low: prediction.low_probability,
+                      medium: prediction.medium_probability,
+                      high: prediction.high_probability,
+                    }}
+                  />
+                </div>
+
+                <AnimatedProbability
+                  label="Low Risk"
+                  value={prediction.low_probability}
+                  color="#10b981"
+                  delay={100}
+                />
+                <AnimatedProbability
+                  label="Medium Risk"
+                  value={prediction.medium_probability}
+                  color="#f59e0b"
+                  delay={200}
+                />
+                <AnimatedProbability
+                  label="High Risk"
+                  value={prediction.high_probability}
+                  color="#ef4444"
+                  delay={300}
+                />
+
+                <div
+                  style={{
+                    marginTop: '1.25rem',
+                    padding: '0.75rem 1rem',
+                    borderRadius: '10px',
+                    background: 'rgba(148, 163, 184, 0.05)',
+                    border: '1px solid rgba(148, 163, 184, 0.08)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                >
+                  <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Prediction Mode</span>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#94a3b8' }}>
+                    {prediction.mode || 'ML Model'}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </section>
     </div>
