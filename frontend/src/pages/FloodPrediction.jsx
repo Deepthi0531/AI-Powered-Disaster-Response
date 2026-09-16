@@ -57,47 +57,6 @@ function RiskBadge({ risk }) {
   );
 }
 
-function UncertaintyBadge({ probabilities }) {
-  if (!probabilities) return null;
-  const probs = Object.values(probabilities).filter((p) => typeof p === 'number');
-  if (probs.length === 0) return null;
-
-  const entropy = -probs.reduce((sum, p) => (p > 0 ? sum + p * Math.log2(p) : sum), 0);
-  const maxEntropy = Math.log2(probs.length || 1);
-  const normalizedEntropy = maxEntropy > 0 ? entropy / maxEntropy : 0;
-
-  let label = 'High Confidence';
-  let color = '#10b981';
-
-  if (normalizedEntropy >= 0.6) {
-    label = 'Low Confidence';
-    color = '#ef4444';
-  } else if (normalizedEntropy >= 0.3) {
-    label = 'Moderate Confidence';
-    color = '#f59e0b';
-  }
-
-  return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: '6px',
-        padding: '4px 12px',
-        borderRadius: '999px',
-        fontSize: '0.75rem',
-        background: `${color}15`,
-        color,
-        border: `1px solid ${color}40`,
-        fontWeight: 600,
-      }}
-    >
-      <span style={{ width: 6, height: 6, borderRadius: '50%', background: color }} />
-      {label}
-    </span>
-  );
-}
-
 export default function FloodPrediction() {
   const [formData, setFormData] = useState({
     latitude: '',
@@ -396,16 +355,6 @@ export default function FloodPrediction() {
                     </p>
                   </div>
                   <RiskBadge risk={prediction.risk_level} />
-                </div>
-
-                <div style={{ marginBottom: '1.25rem' }}>
-                  <UncertaintyBadge
-                    probabilities={{
-                      low: prediction.low_probability,
-                      medium: prediction.medium_probability,
-                      high: prediction.high_probability,
-                    }}
-                  />
                 </div>
 
                 <AnimatedProbability
