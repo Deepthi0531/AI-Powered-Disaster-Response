@@ -1,78 +1,23 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import API from '../api/axios';
 
-function AnimatedProbability({ label, value, color, delay }) {
-  const [width, setWidth] = useState(0);
-  useEffect(() => {
-    const timer = setTimeout(() => setWidth(value * 100), 100 + delay);
-    return () => clearTimeout(timer);
-  }, [value, delay]);
-
-  return (
-    <div style={{ marginBottom: '0.75rem', animationDelay: `${delay}ms` }} className="animate-fade-in-up">
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-        <span style={{ fontSize: '0.85rem', color: '#94a3b8' }}>{label}</span>
-        <span style={{ fontSize: '0.85rem', fontWeight: 700, color }}>{(value * 100).toFixed(1)}%</span>
-      </div>
-      <div className="probability-bar">
-        <div
-          className="probability-bar-fill"
-          style={{ width: `${width}%`, background: color }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function RiskBadge({ risk }) {
-  const level = risk?.toLowerCase() || 'low';
-  return (
-    <span className={`risk-indicator ${level}`}>
-      <span className={`risk-dot ${level}`} />
-      {risk} Risk
-    </span>
-  );
-}
-
-function UncertaintyBadge({ probabilities }) {
-  if (!probabilities) return null;
-  const maxProb = Math.max(...Object.values(probabilities));
-  const entropy = -Object.values(probabilities).reduce((sum, p) => {
-    if (p > 0) return sum + p * Math.log2(p);
-    return sum;
-  }, 0);
-  const maxEntropy = Math.log2(Object.keys(probabilities).length);
-  const normalizedEntropy = entropy / maxEntropy;
-
-  let label, color;
-  if (normalizedEntropy < 0.3) { label = 'High Confidence'; color = '#4ade80'; }
-  else if (normalizedEntropy < 0.6) { label = 'Moderate Confidence'; color = '#fbbf24'; }
-  else { label = 'Low Confidence'; color = '#f87171'; }
-
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: '6px',
-      padding: '4px 12px', borderRadius: '999px', fontSize: '0.75rem',
-      background: `${color}15`, color, border: `1px solid ${color}40`,
-      fontWeight: 600,
-    }}>
-      <span style={{ width: 6, height: 6, borderRadius: '50%', background: color }} />
-      {label}
-    </span>
-  );
-}
-
 export default function FloodPrediction() {
-  const [formData, setFormData] = useState({ latitude: '', longitude: '' });
+  const [formData, setFormData] = useState({
+    latitude: '',
+    longitude: '',
+  });
+
   const [prediction, setPrediction] = useState(null);
   const [loading, setLoading] = useState(false);
   const [locationLoading, setLocationLoading] = useState(false);
+  const [geocodingLoading, setGeocodingLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-  const [showResult, setShowResult] = useState(false);
-  const resultRef = useRef(null);
 
   const handleChange = (e) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    setFormData({
+      ...formData,
+      [e.target.name]: e.target.value,
+    });
   };
 
   const getCurrentLocation = () => {
@@ -93,12 +38,14 @@ export default function FloodPrediction() {
           latitude: position.coords.latitude.toFixed(6),
           longitude: position.coords.longitude.toFixed(6),
         });
+
         setLocationLoading(false);
       },
       () => {
         setErrorMessage('Unable to get location access.');
         setLocationLoading(false);
-      }
+      },
+      { enableHighAccuracy: true }
     );
   };
 
@@ -109,134 +56,126 @@ export default function FloodPrediction() {
     setPrediction(null);
     setShowResult(false);
 
+    let lat = formData.latitude ? Number(formData.latitude) : null;
+    let lng = formData.longitude ? Number(formData.longitude) : null;
+
     try {
-      if (!formData.latitude || !formData.longitude) {
-        setErrorMessage('Please enter latitude and longitude.');
+      // Forward Geocoding: If only location name is provided, convert to lat/lng on the frontend first
+      if ((!lat || !lng) && formData.location_name.trim()) {
+        setGeocodingLoading(true);
+        const geoResponse = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+            formData.location_name
+          )}&format=json&limit=1`
+        );
+        const geoData = await geoResponse.json();
+        setGeocodingLoading(false);
+
+        if (geoData && geoData.length > 0) {
+          lat = parseFloat(geoData[0].lat);
+          lng = parseFloat(geoData[0].lon);
+
+          const formattedLat = lat.toFixed(6);
+          const formattedLng = lng.toFixed(6);
+
+          // Automatically populate inputs and update map pin
+          setFormData((prev) => ({
+            ...prev,
+            latitude: formattedLat,
+            longitude: formattedLng,
+          }));
+          updateCoordinatesOnMap(lat, lng);
+        } else {
+          setErrorMessage(`Could not find coordinates for "${formData.location_name}".`);
+          setLoading(false);
+          return;
+        }
+      }
+
+      if (!lat || !lng) {
+        setErrorMessage('Please enter a location name or latitude and longitude.');
         setLoading(false);
         return;
       }
 
+      // Send exact latitude and longitude payload to backend
       const response = await API.post('/predict-flood', {
-        latitude: Number(formData.latitude),
-        longitude: Number(formData.longitude),
+        latitude: lat,
+        longitude: lng,
+        location_name: formData.location_name,
       });
 
       setPrediction(response.data);
       setTimeout(() => setShowResult(true), 50);
     } catch (error) {
       setErrorMessage(
-        error.response?.data?.error ||
-          'Failed to analyze risk. Ensure backend is running.'
+        error.response?.data?.error || 'Failed to analyze risk. Ensure backend is running.'
       );
     } finally {
+      setGeocodingLoading(false);
       setLoading(false);
     }
   };
 
   return (
     <div className="dashboard-page">
-      <section className="dashboard-intro animate-fade-in-up">
+      <section className="dashboard-intro">
         <div>
           <p className="eyebrow">ML RISK ASSESSMENT</p>
-          <h1 className="gradient-text">Flood Risk Prediction</h1>
-          <p style={{ color: '#94a3b8', marginTop: '0.5rem', fontSize: '0.95rem' }}>
-            Enter coordinates or use your GPS location to get real-time flood risk analysis powered by machine learning.
-          </p>
+          <h1>Flood Risk Prediction</h1>
         </div>
       </section>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', alignItems: 'start' }}>
-        {/* Input Form */}
-        <section className="dashboard-section animate-fade-in-up delay-1">
-          <div className="glass-card">
-            <h2 style={{ margin: '0 0 1.25rem', fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '1.4rem' }}>📍</span> Location Input
-            </h2>
+      <section className="dashboard-section">
+        <div style={{ maxWidth: '450px' }}>
+          <form
+            onSubmit={handleSubmit}
+            style={{ display: 'grid', gap: '1rem' }}
+          >
+            <div>
+              <label>Latitude</label>
+              <input
+                type="number"
+                step="any"
+                name="latitude"
+                value={formData.latitude}
+                onChange={handleChange}
+                placeholder="Enter latitude"
+                required
+              />
+            </div>
 
-            <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '1rem' }}>
-              <div>
-                <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#94a3b8', fontWeight: 600 }}>
-                  Latitude
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  name="latitude"
-                  value={formData.latitude}
-                  onChange={handleChange}
-                  placeholder="e.g. 27.7172"
-                  required
-                  style={{
-                    width: '100%', padding: '12px 16px', borderRadius: '10px',
-                    border: '1px solid rgba(148, 163, 184, 0.15)',
-                    background: 'rgba(15, 23, 42, 0.8)', color: '#e2e8f0',
-                    fontSize: '0.95rem', outline: 'none',
-                    transition: 'all 0.2s ease',
-                  }}
-                />
-              </div>
+            <div>
+              <label>Longitude</label>
+              <input
+                type="number"
+                step="any"
+                name="longitude"
+                value={formData.longitude}
+                onChange={handleChange}
+                placeholder="Enter longitude"
+                required
+              />
+            </div>
 
-              <div>
-                <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#94a3b8', fontWeight: 600 }}>
-                  Longitude
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  name="longitude"
-                  value={formData.longitude}
-                  onChange={handleChange}
-                  placeholder="e.g. 85.3240"
-                  required
-                  style={{
-                    width: '100%', padding: '12px 16px', borderRadius: '10px',
-                    border: '1px solid rgba(148, 163, 184, 0.15)',
-                    background: 'rgba(15, 23, 42, 0.8)', color: '#e2e8f0',
-                    fontSize: '0.95rem', outline: 'none',
-                    transition: 'all 0.2s ease',
-                  }}
-                />
-              </div>
+            <button
+              type="button"
+              onClick={getCurrentLocation}
+              disabled={locationLoading || loading}
+            >
+              {locationLoading
+                ? 'Getting Location...'
+                : 'Use Current Location'}
+            </button>
 
-              <div style={{ display: 'flex', gap: '0.75rem' }}>
-                <button
-                  type="button"
-                  onClick={getCurrentLocation}
-                  disabled={locationLoading || loading}
-                  className="btn-modern"
-                  style={{
-                    flex: 1, padding: '12px', borderRadius: '10px',
-                    border: '1px solid rgba(148, 163, 184, 0.2)',
-                    background: 'rgba(255, 255, 255, 0.04)', color: '#e2e8f0',
-                    fontWeight: 600, cursor: 'pointer', fontSize: '0.9rem',
-                  }}
-                >
-                  {locationLoading ? (
-                    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                      <span className="skeleton" style={{ width: 16, height: 16, borderRadius: '50%' }} />
-                      Locating...
-                    </span>
-                  ) : '📡 Use GPS'}
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={loading || locationLoading}
-                  className="btn-modern primary-button"
-                  style={{
-                    flex: 2, padding: '12px', borderRadius: '10px',
-                    fontSize: '0.95rem',
-                  }}
-                >
-                  {loading ? (
-                    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                      <span className="skeleton" style={{ width: 16, height: 16, borderRadius: '50%' }} />
-                      Analyzing...
-                    </span>
-                  ) : '🔍 Calculate Risk'}
-                </button>
-              </div>
-            </form>
+            <button
+              type="submit"
+              className="primary-button"
+              disabled={loading || locationLoading}
+            >
+              {loading ? 'Processing Model...' : 'Calculate Flood Risk'}
+            </button>
+          </form>
 
             {errorMessage && (
               <div className="animate-fade-in alert alert-error" style={{ marginTop: '1rem' }}>
@@ -302,12 +241,29 @@ export default function FloodPrediction() {
             </div>
           )}
 
-          {!loading && !prediction && (
-            <div className="glass-card" style={{ textAlign: 'center', padding: '3rem 2rem' }}>
-              <div style={{ fontSize: '3rem', marginBottom: '1rem', opacity: 0.5 }}>🌊</div>
-              <h3 style={{ margin: '0 0 0.5rem', color: '#94a3b8', fontWeight: 600 }}>No Analysis Yet</h3>
-              <p style={{ margin: 0, color: '#64748b', fontSize: '0.9rem' }}>
-                Enter coordinates and click Calculate Risk to get started.
+          {prediction && (
+            <div
+              style={{
+                marginTop: '1.5rem',
+                padding: '1rem',
+                border: '1px solid #2574e8',
+              }}
+            >
+              <h2>Flood Risk: {prediction.risk_level}</h2>
+
+              <p>
+                <strong>Low Probability:</strong>{' '}
+                {(prediction.low_probability * 100).toFixed(2)}%
+              </p>
+
+              <p>
+                <strong>Medium Probability:</strong>{' '}
+                {(prediction.medium_probability * 100).toFixed(2)}%
+              </p>
+
+              <p>
+                <strong>High Probability:</strong>{' '}
+                {(prediction.high_probability * 100).toFixed(2)}%
               </p>
             </div>
           )}
