@@ -20,7 +20,9 @@ try:
         AutoProcessor,
     )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu"
+    )
     CV_MODEL_LOADED = True
 
 except Exception as error:
@@ -201,11 +203,7 @@ RESOLUTION_PROMPTS = {
     },
 }
 
-# Random pet/selfie/document images are rejected at 45%.
 UNRELATED_REJECT_CONFIDENCE = 0.45
-
-# Only very confident active hazards are rejected.
-# Normal house/normal road images will be treated as clear scenes.
 ACTIVE_HAZARD_REJECT_CONFIDENCE = 0.80
 
 
@@ -295,6 +293,7 @@ def classify_image(image, labels, prompts):
 
 def verify_incident_image(image_path):
     """CV analysis for a newly reported incident image."""
+
     is_valid, width, height, image_format = get_image_details(image_path)
 
     if not is_valid:
@@ -344,7 +343,10 @@ def verify_incident_image(image_path):
 
         return {
             "status": "pending_review",
-            "confidence_score": round(prediction["confidence"] / 100, 4),
+            "confidence_score": round(
+                prediction["confidence"] / 100,
+                4,
+            ),
             "detected_labels": [prediction["label"]],
             "detections": detections,
             "image_width": width,
@@ -352,7 +354,8 @@ def verify_incident_image(image_path):
             "image_format": image_format,
             "model": "CLIP Zero-Shot Image Classifier",
             "message": (
-                f"Computer Vision prediction: {prediction['label']} "
+                f"Computer Vision prediction: "
+                f"{prediction['label']} "
                 f"({prediction['confidence']}%)."
             ),
         }
@@ -372,11 +375,9 @@ def verify_incident_image(image_path):
 
 def verify_resolution_proof(image_path, incident_type):
     """
-    Automatic proof verification.
-
-    Normal dry house/road/clear scene -> approved.
-    Very clear active incident -> rejected.
-    Cat/dog/selfie/food/document -> rejected.
+    Normal clear scene -> approved.
+    Active disaster -> rejected.
+    Random unrelated image -> rejected.
     """
 
     is_valid, width, height, image_format = get_image_details(image_path)
@@ -450,7 +451,7 @@ def verify_resolution_proof(image_path, incident_type):
                 **result,
                 "status": "rejected",
                 "message": (
-                    f"Proof rejected: uploaded image is unrelated "
+                    "Proof rejected: uploaded image is unrelated "
                     f"to the {incident_type} incident."
                 ),
             }
@@ -473,17 +474,16 @@ def verify_resolution_proof(image_path, incident_type):
                 **result,
                 "status": "rejected",
                 "message": (
-                    f"Proof rejected: computer vision strongly indicates "
+                    "Proof rejected: computer vision strongly indicates "
                     f"that the {incident_type} hazard may still be active."
                 ),
             }
 
-        # Clear/normal home or road is automatically accepted here.
         return {
             **result,
             "status": "approved",
             "message": (
-                f"Proof accepted: computer vision verified a clear "
+                "Proof accepted: computer vision verified a clear "
                 f"{incident_type} scene with "
                 f"{best_result['confidence']}% confidence."
             ),
