@@ -95,11 +95,10 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 
 function formatRouteTime(minutes) {
   if (!minutes || minutes <= 0) {
-    return 'Calculating...';
+    return '1 min';
   }
 
   const totalMinutes = Math.round(minutes);
-
   const hours = Math.floor(totalMinutes / 60);
   const mins = totalMinutes % 60;
 
@@ -169,6 +168,7 @@ function LiveMap({
   const locationMarker = useRef(null);
   const tappedMarker = useRef(null);
   const routeLayerRef = useRef(null);
+  const gpsResolved = useRef(false);
 
   const onLocationChangeRef = useRef(onLocationChange);
 
@@ -202,6 +202,13 @@ function LiveMap({
         );
 
       locationMarker.current.on(
+        'dragstart',
+        () => {
+          gpsResolved.current = true;
+        }
+      );
+
+      locationMarker.current.on(
         'dragend',
         (event) => {
           const newPos = event.target.getLatLng();
@@ -227,7 +234,7 @@ function LiveMap({
           mapRef.current.getContainer() &&
           mapRef.current._loaded
         ) {
-          mapRef.current.setView(point, 13);
+          mapRef.current.setView(point, 15);
         }
       });
     }
@@ -263,7 +270,7 @@ function LiveMap({
       mapElement.current
     ).setView(
       [initialLat, initialLng],
-      13
+      15
     );
 
     L.tileLayer(
@@ -277,11 +284,17 @@ function LiveMap({
 
     mapRef.current = map;
 
+    setTimeout(() => {
+      map.invalidateSize();
+    }, 150);
+
     /* GPS */
 
     const handleLocationSuccess = (
       position
     ) => {
+      if (gpsResolved.current) return;
+      gpsResolved.current = true;
       const {
         latitude,
         longitude,
@@ -294,6 +307,8 @@ function LiveMap({
     };
 
     const handleLocationError = () => {
+      if (gpsResolved.current) return;
+      gpsResolved.current = true;
       const fallbackLat =
         userCoords?.lat ?? 14.2798;
 
@@ -326,6 +341,7 @@ function LiveMap({
     /* MAP CLICK */
 
     const handleMapClick = (e) => {
+      gpsResolved.current = true;
       const {
         lat,
         lng,
@@ -448,7 +464,7 @@ function LiveMap({
       map.fitBounds(
         routeLayerRef.current.getBounds(),
         {
-          padding: [40, 40],
+          padding: [50, 50],
         }
       );
     }
@@ -583,11 +599,11 @@ function LiveMap({
                   coordinates[0],
                 ],
                 {
-                  radius: 9,
+                  radius: 10,
                   color: '#fff',
                   weight: 2,
                   fillColor:
-                    '#ef6a55',
+                    '#ef4444',
                   fillOpacity: 1,
                 }
               ).bindTooltip(
@@ -675,23 +691,10 @@ export default function Dashboard() {
     setSelectedShelter,
   ] = useState(null);
 
-  /*
-   * IMPORTANT:
-   * routeTarget is used for BOTH:
-   * - shelter routing
-   * - searched destination routing
-   */
   const [
     routeTarget,
     setRouteTarget,
   ] = useState(null);
-
-  const [
-    locationMessage,
-    setLocationMessage,
-  ] = useState(
-    'Acquiring location...'
-  );
 
   const [
     safeRoute,
@@ -717,6 +720,11 @@ export default function Dashboard() {
     isSearchingDestination,
     setIsSearchingDestination,
   ] = useState(false);
+
+  const [
+    locationMessage,
+    setLocationMessage,
+  ] = useState('Acquiring location...');
 
   const activeAbortController =
     useRef(null);
@@ -860,12 +868,6 @@ export default function Dashboard() {
       );
     }
 
-    /*
-     * Convert longitude to a latitude-adjusted
-     * local coordinate system so that route
-     * segment projection is more accurate.
-     */
-
     const avgLat =
       ((aLat + bLat + pLat) /
         3) *
@@ -927,94 +929,6 @@ export default function Dashboard() {
   };
 
   /* =========================================================
-     CHECK WHETHER ROUTE PASSES INCIDENTS
-  ========================================================= */
-
-  const checkRouteHasHazards = (
-    geometryCoordinates,
-    hazardsList,
-    safetyRadiusKm = 3.0
-  ) => {
-    let breachCount = 0;
-
-    let minDistanceToHazard =
-      Infinity;
-
-    if (
-      !geometryCoordinates ||
-      geometryCoordinates.length <
-        2
-    ) {
-      return {
-        hasConflict: false,
-        breachCount: 0,
-        minDistanceToHazard:
-          Infinity,
-      };
-    }
-
-    for (
-      let i = 0;
-      i <
-      geometryCoordinates.length -
-        1;
-      i++
-    ) {
-      const aLng =
-        geometryCoordinates[i][0];
-
-      const aLat =
-        geometryCoordinates[i][1];
-
-      const bLng =
-        geometryCoordinates[
-          i + 1
-        ][0];
-
-      const bLat =
-        geometryCoordinates[
-          i + 1
-        ][1];
-
-      for (
-        const hazard of hazardsList
-      ) {
-        const dist =
-          distanceToSegmentKm(
-            hazard.lat,
-            hazard.lng,
-            aLat,
-            aLng,
-            bLat,
-            bLng
-          );
-
-        if (
-          dist <
-          minDistanceToHazard
-        ) {
-          minDistanceToHazard =
-            dist;
-        }
-
-        if (
-          dist <
-          safetyRadiusKm
-        ) {
-          breachCount++;
-        }
-      }
-    }
-
-    return {
-      hasConflict:
-        breachCount > 0,
-      breachCount,
-      minDistanceToHazard,
-    };
-  };
-
-  /* =========================================================
      CREATE INCIDENT HAZARDS
   ========================================================= */
 
@@ -1043,14 +957,12 @@ export default function Dashboard() {
           }
 
           if (
-            inc.lat !== null &&
+            (inc.lat !== null &&
             inc.lat !==
               undefined &&
-            (
-              inc.lng !== null &&
-              inc.lng !==
-                undefined
-            ) ||
+            inc.lng !== null &&
+            inc.lng !==
+              undefined) ||
             (
               inc.lon !== null &&
               inc.lon !==
@@ -1080,10 +992,6 @@ export default function Dashboard() {
 
   /* =========================================================
      SAFE ROUTE CALCULATION
-     
-     SAME FUNCTION IS USED FOR:
-     1. SHELTERS
-     2. SEARCHED DESTINATIONS
   ========================================================= */
 
   const calculateRouteToTarget =
@@ -1130,639 +1038,151 @@ export default function Dashboard() {
       setIsCalculatingRoute(
         true
       );
-
-      /*
-       * Remove old route immediately.
-       */
       setSafeRoute(null);
 
       try {
         const hazards =
           getIncidentHazards();
 
-        /*
-         * Straight-line distance.
-         */
-        const straightDist =
-          parseFloat(
-            calculateDistance(
-              userCoords.lat,
-              userCoords.lng,
-              destLat,
-              destLng
-            )
-          );
+        const fetchRoutes = async (
+          startLng,
+          startLat,
+          endLng,
+          endLat,
+          waypoint = null
+        ) => {
+          let url =
+            `https://router.project-osrm.org/route/v1/driving/` +
+            `${startLng},${startLat};`;
 
-        /*
-         * Safety radius around every verified
-         * incident.
-         *
-         * A route entering this radius is
-         * considered unsafe.
-         */
-        const safetyRadiusKm =
-          Math.min(
-            3.0,
-            Math.max(
-              0.5,
-              straightDist *
-                0.025
-            )
-          );
+          if (waypoint) {
+            url += `${waypoint.lng},${waypoint.lat};`;
+          }
 
-        /*
-         * Never allow the safety radius to
-         * become extremely small.
-         */
-        const finalSafetyRadius =
-          Math.max(
-            0.75,
-            Math.min(
-              3.0,
-              safetyRadiusKm
-            )
-          );
+          url +=
+            `${endLng},${endLat}` +
+            `?overview=full` +
+            `&geometries=geojson` +
+            `&alternatives=true` +
+            `&steps=true`;
 
-        /*
-         * -----------------------------------------------------
-         * FIRST:
-         * Ask OSRM for the normal shortest route
-         * plus alternative routes.
-         * -----------------------------------------------------
-         */
+          try {
+            const res = await fetch(url);
+            if (!res.ok) return [];
+            const data = await res.json();
+            return data.routes || [];
+          } catch {
+            return [];
+          }
+        };
 
-        const osrmBaseUrl =
-          `https://router.project-osrm.org/route/v1/driving/` +
-          `${userCoords.lng},${userCoords.lat};` +
-          `${destLng},${destLat}` +
-          `?overview=full` +
-          `&geometries=geojson` +
-          `&alternatives=true` +
-          `&steps=true`;
-
-        const response =
-          await fetch(
-            osrmBaseUrl
-          );
-
-        if (!response.ok) {
-          throw new Error(
-            'Routing service failed'
-          );
-        }
-
-        const data =
-          await response.json();
-
-        let candidateRoutes =
-          data.routes &&
-          data.routes.length > 0
-            ? [...data.routes]
-            : [];
-
-        /*
-         * -----------------------------------------------------
-         * FIND INCIDENTS RELEVANT TO THIS JOURNEY
-         * -----------------------------------------------------
-         */
-
-        const relevantHazards =
-          hazards.filter(
-            (hazard) => {
-              const distanceFromStart =
-                parseFloat(
-                  calculateDistance(
-                    userCoords.lat,
-                    userCoords.lng,
-                    hazard.lat,
-                    hazard.lng
-                  )
-                );
-
-              const distanceFromDestination =
-                parseFloat(
-                  calculateDistance(
-                    destLat,
-                    destLng,
-                    hazard.lat,
-                    hazard.lng
-                  )
-                );
-
-              /*
-               * Only create detours for incidents
-               * that are reasonably close to the
-               * journey corridor.
-               */
-              return (
-                distanceFromStart +
-                  distanceFromDestination <=
-                straightDist *
-                  1.8 +
-                  5.0
-              );
-            }
-          );
-
-        /*
-         * -----------------------------------------------------
-         * CHECK ORIGINAL OSRM ROUTES
-         * -----------------------------------------------------
-         */
-
-        const evaluatedOriginalRoutes =
-          candidateRoutes.map(
-            (route) => {
-              const evaluation =
-                checkRouteHasHazards(
-                  route.geometry
-                    .coordinates,
-                  relevantHazards,
-                  finalSafetyRadius
-                );
-
-              return {
-                route,
-                evaluation,
-              };
-            }
-          );
-
-        /*
-         * If the normal shortest route does not
-         * touch any incident, use it.
-         *
-         * This is important because we want the
-         * SHORTEST route whenever it is safe.
-         */
-
-        const safeOriginalRoutes =
-          evaluatedOriginalRoutes.filter(
-            (item) =>
-              !item.evaluation
-                .hasConflict
-          );
-
-        /*
-         * -----------------------------------------------------
-         * IF NORMAL ROUTES ARE UNSAFE:
-         * GENERATE DETOUR ROUTES AROUND INCIDENTS.
-         * -----------------------------------------------------
-         */
-
-        if (
-          safeOriginalRoutes.length ===
-            0 &&
-          relevantHazards.length > 0
-        ) {
-          /*
-           * We generate points around each incident.
-           *
-           * These points are used as temporary
-           * routing waypoints.
-           */
-
-          const angles = [
-            0,
-            45,
-            90,
-            135,
-            180,
-            225,
-            270,
-            315,
-          ];
-
-          /*
-           * Keep detours reasonably close to
-           * the incident so that the alternate
-           * route does not become unnecessarily long.
-           */
-          const pushDistances = [
-            Math.max(
-              1.0,
-              finalSafetyRadius *
-                1.25
-            ),
-            Math.max(
-              1.5,
-              finalSafetyRadius *
-                1.7
-            ),
-          ];
-
-          /*
-           * Limit the number of routing requests.
-           *
-           * We take the closest relevant incidents
-           * first.
-           */
-          const sortedHazards =
-            [...relevantHazards]
-              .sort(
-                (a, b) => {
-                  const aDist =
-                    parseFloat(
-                      calculateDistance(
-                        userCoords.lat,
-                        userCoords.lng,
-                        a.lat,
-                        a.lng
-                      )
-                    );
-
-                  const bDist =
-                    parseFloat(
-                      calculateDistance(
-                        userCoords.lat,
-                        userCoords.lng,
-                        b.lat,
-                        b.lng
-                      )
-                    );
-
-                  return (
-                    aDist - bDist
-                  );
-                }
-              )
-              .slice(0, 3);
-
+        const getRouteMinClearance = (routeCoords) => {
+          let minClearance = Infinity;
           for (
-            const hazard of sortedHazards
+            let i = 0;
+            i < routeCoords.length - 1;
+            i++
           ) {
-            for (
-              const distKm of pushDistances
-            ) {
-              for (
-                const angle of angles
-              ) {
-                const rad =
-                  (angle *
-                    Math.PI) /
-                  180;
+            const aLng = routeCoords[i][0];
+            const aLat = routeCoords[i][1];
+            const bLng = routeCoords[i + 1][0];
+            const bLat = routeCoords[i + 1][1];
 
-                const dLat =
-                  (distKm /
-                    111.32) *
-                  Math.cos(rad);
-
-                const latitudeRadians =
-                  (hazard.lat *
-                    Math.PI) /
-                  180;
-
-                const dLng =
-                  (distKm /
-                    (111.32 *
-                      Math.cos(
-                        latitudeRadians
-                      ))) *
-                  Math.sin(rad);
-
-                const waypointLat =
-                  hazard.lat +
-                  dLat;
-
-                const waypointLng =
-                  hazard.lng +
-                  dLng;
-
-                /*
-                 * Don't place waypoint inside
-                 * another incident's safety zone.
-                 */
-                const waypointIsSafe =
-                  hazards.every(
-                    (otherHazard) => {
-                      const distance =
-                        parseFloat(
-                          calculateDistance(
-                            waypointLat,
-                            waypointLng,
-                            otherHazard.lat,
-                            otherHazard.lng
-                          )
-                        );
-
-                      return (
-                        distance >=
-                        finalSafetyRadius
-                      );
-                    }
-                  );
-
-                if (
-                  !waypointIsSafe
-                ) {
-                  continue;
-                }
-
-                try {
-                  const detourUrl =
-                    `https://router.project-osrm.org/route/v1/driving/` +
-                    `${userCoords.lng},${userCoords.lat};` +
-                    `${waypointLng},${waypointLat};` +
-                    `${destLng},${destLat}` +
-                    `?overview=full&geometries=geojson`;
-
-                  const detourResponse =
-                    await fetch(
-                      detourUrl
-                    );
-
-                  if (
-                    !detourResponse.ok
-                  ) {
-                    continue;
-                  }
-
-                  const detourData =
-                    await detourResponse.json();
-
-                  if (
-                    detourData.routes &&
-                    detourData.routes[0]
-                  ) {
-                    candidateRoutes.push(
-                      detourData.routes[0]
-                    );
-                  }
-                } catch (detourError) {
-                  console.error(
-                    'Detour route error:',
-                    detourError
-                  );
-                }
-              }
-            }
-          }
-        }
-
-        /*
-         * -----------------------------------------------------
-         * REMOVE DUPLICATE ROUTES
-         * -----------------------------------------------------
-         */
-
-        const uniqueRoutes =
-          [];
-
-        const routeKeys =
-          new Set();
-
-        candidateRoutes.forEach(
-          (route) => {
-            if (
-              !route.geometry ||
-              !route.geometry
-                .coordinates
-            ) {
-              return;
-            }
-
-            const first =
-              route.geometry
-                .coordinates[0];
-
-            const last =
-              route.geometry
-                .coordinates[
-                  route.geometry
-                    .coordinates
-                    .length - 1
-                ];
-
-            const key =
-              `${route.distance.toFixed(
-                0
-              )}-${first[0].toFixed(
-                4
-              )}-${first[1].toFixed(
-                4
-              )}-${last[0].toFixed(
-                4
-              )}-${last[1].toFixed(
-                4
-              )}`;
-
-            if (
-              !routeKeys.has(key)
-            ) {
-              routeKeys.add(key);
-              uniqueRoutes.push(
-                route
+            for (const h of hazards) {
+              const d = distanceToSegmentKm(
+                h.lat,
+                h.lng,
+                aLat,
+                aLng,
+                bLat,
+                bLng
               );
+              if (d < minClearance) minClearance = d;
             }
           }
+          return minClearance;
+        };
+
+        let allCandidates = [];
+
+        const baseRoutes = await fetchRoutes(
+          userCoords.lng,
+          userCoords.lat,
+          destLng,
+          destLat
         );
+        allCandidates.push(...baseRoutes);
 
-        /*
-         * -----------------------------------------------------
-         * EVALUATE EVERY ROUTE AGAINST INCIDENTS
-         * -----------------------------------------------------
-         */
+        if (hazards.length > 0) {
+          const detourPromises = [];
+          
+          for (const h of hazards) {
+            const dUser = parseFloat(calculateDistance(userCoords.lat, userCoords.lng, h.lat, h.lng));
+            const dDest = parseFloat(calculateDistance(destLat, destLng, h.lat, h.lng));
+            const straightDist = parseFloat(calculateDistance(userCoords.lat, userCoords.lng, destLat, destLng));
+            
+            if (dUser + dDest <= straightDist * 2.5 + 4.0) {
+              const pushDistances = [1.2, 1.5];
+              for (let distKm of pushDistances) {
+                for (let angle = 0; angle < 360; angle += 45) {
+                  const rad = (angle * Math.PI) / 180;
+                  const dLat = (distKm / 111.32) * Math.cos(rad);
+                  const dLng = (distKm / (111.32 * Math.cos((h.lat * Math.PI) / 180))) * Math.sin(rad);
 
-        const evaluatedRoutes =
-          uniqueRoutes.map(
-            (route) => {
-              const evaluation =
-                checkRouteHasHazards(
-                  route.geometry
-                    .coordinates,
-                  hazards,
-                  finalSafetyRadius
-                );
-
-              return {
-                route,
-                evaluation,
-              };
-            }
-          );
-
-        /*
-         * -----------------------------------------------------
-         * SAFE ROUTES ONLY
-         *
-         * This is the important part:
-         *
-         * 1. Ignore routes that hit an incident.
-         * 2. Among safe routes, choose the shortest.
-         * -----------------------------------------------------
-         */
-
-        const safeRoutes =
-          evaluatedRoutes.filter(
-            (item) =>
-              !item.evaluation
-                .hasConflict
-          );
-
-        let bestRoute = null;
-        let routeWasSafe = false;
-
-        if (
-          safeRoutes.length > 0
-        ) {
-          /*
-           * SHORTEST SAFE ROUTE
-           */
-          bestRoute =
-            safeRoutes.reduce(
-              (shortest, current) =>
-                current.route.distance <
-                shortest.route.distance
-                  ? current
-                  : shortest
-            );
-
-          routeWasSafe = true;
-        } else if (
-          evaluatedRoutes.length >
-          0
-        ) {
-          /*
-           * This should only happen if every
-           * available road route is affected.
-           *
-           * We choose the route with:
-           * 1. Least incident breaches
-           * 2. Then greatest distance from incidents
-           * 3. Then shortest distance
-           *
-           * This prevents the application from
-           * showing "no route" when the road network
-           * itself has no completely clean option.
-           */
-          bestRoute =
-            evaluatedRoutes.reduce(
-              (best, current) => {
-                if (
-                  current.evaluation
-                    .breachCount <
-                  best.evaluation
-                    .breachCount
-                ) {
-                  return current;
+                  const wp = { lat: h.lat + dLat, lng: h.lng + dLng };
+                  detourPromises.push(fetchRoutes(userCoords.lng, userCoords.lat, destLng, destLat, wp));
                 }
-
-                if (
-                  current.evaluation
-                    .breachCount ===
-                    best.evaluation
-                      .breachCount
-                ) {
-                  if (
-                    current.evaluation
-                      .minDistanceToHazard >
-                    best.evaluation
-                      .minDistanceToHazard
-                  ) {
-                    return current;
-                  }
-
-                  if (
-                    current.evaluation
-                      .minDistanceToHazard ===
-                    best.evaluation
-                      .minDistanceToHazard
-                  ) {
-                    return current
-                      .route
-                      .distance <
-                      best.route
-                        .distance
-                      ? current
-                      : best;
-                  }
-                }
-
-                return best;
               }
-            );
+            }
+          }
+
+          const resultsArray = await Promise.all(detourPromises);
+          for (const detourResults of resultsArray) {
+            allCandidates.push(...detourResults);
+          }
         }
 
-        /*
-         * -----------------------------------------------------
-         * DISPLAY ROUTE
-         * -----------------------------------------------------
-         */
+        let evaluatedRoutes = allCandidates.map(route => {
+          return {
+            route,
+            clearance: getRouteMinClearance(route.geometry.coordinates)
+          };
+        });
 
-        if (
-          !bestRoute ||
-          !bestRoute.route
-        ) {
-          console.error(
-            'No route could be calculated.'
-          );
+        const IDEAL_CLEARANCE = 1.0;
 
-          setSafeRoute(
-            null
-          );
+        evaluatedRoutes.sort((a, b) => {
+          if (a.clearance >= IDEAL_CLEARANCE && b.clearance >= IDEAL_CLEARANCE) {
+            return a.route.distance - b.route.distance;
+          }
+          return b.clearance - a.clearance;
+        });
 
+        const bestRoute = evaluatedRoutes.length > 0 ? evaluatedRoutes[0].route : null;
+
+        if (!bestRoute) {
+          setSafeRoute(null);
           return;
         }
 
-        const selectedRoute =
-          bestRoute.route;
-
-        const routeDistanceKm =
-          selectedRoute.distance /
-          1000;
-
-        const routeTimeMinutes =
-          selectedRoute.duration /
-          60;
+        const routeDistanceKm = bestRoute.distance / 1000;
+        const driveMinutes = bestRoute.duration / 60;
+        const walkMinutes = (routeDistanceKm / 4.8) * 60;
 
         setSafeRoute({
-          coordinates:
-            selectedRoute
-              .geometry
-              .coordinates,
-
-          distance:
-            routeDistanceKm.toFixed(
-              1
-            ),
-
-          duration:
-            Math.round(
-              routeTimeMinutes
-            ),
-
-          durationText:
-            formatRouteTime(
-              routeTimeMinutes
-            ),
-
-          wasSafe:
-            routeWasSafe,
-
-          incidentAvoided:
-            relevantHazards.length ===
-              0 ||
-            routeWasSafe,
-
-          incidentCount:
-            relevantHazards.length,
-
-          safetyRadius:
-            finalSafetyRadius,
+          coordinates: bestRoute.geometry.coordinates,
+          distance: routeDistanceKm.toFixed(2),
+          driveTimeText: formatRouteTime(driveMinutes),
+          walkTimeText: formatRouteTime(walkMinutes),
         });
       } catch (err) {
         console.error(
           'Error calculating safe route:',
           err
         );
-
-        setSafeRoute(
-          null
-        );
+        setSafeRoute(null);
       } finally {
-        setIsCalculatingRoute(
-          false
-        );
+        setIsCalculatingRoute(false);
       }
     };
 
@@ -1772,16 +1192,13 @@ export default function Dashboard() {
 
   const handleShelterSelect =
     (shelter) => {
+      setSafeRoute(null); // INSTANT CLEAR
       setSelectedShelter(
         shelter
       );
 
       setRouteTarget(
         shelter
-      );
-
-      setSafeRoute(
-        null
       );
     };
 
@@ -1791,6 +1208,7 @@ export default function Dashboard() {
         return;
       }
 
+      setSafeRoute(null); // INSTANT CLEAR
       calculateRouteToTarget(
         routeTarget
       );
@@ -1800,147 +1218,85 @@ export default function Dashboard() {
      SEARCH DESTINATION
   ========================================================= */
 
-  const handleDestinationSearch =
-    async (e) => {
-      e.preventDefault();
+  const handleDestinationSearch = async (e) => {
+    e.preventDefault();
 
-      if (
-        !destinationSearch.trim()
-      ) {
-        return;
-      }
+    if (!destinationSearch.trim()) {
+      return;
+    }
 
-      setIsSearchingDestination(
-        true
+    setSafeRoute(null); // INSTANT CLEAR
+    setIsSearchingDestination(true);
+
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+          destinationSearch
+        )}&countrycodes=in&limit=5`,
+        {
+          headers: {
+            'Accept-Language': 'en',
+            'Accept': 'application/json'
+          }
+        }
       );
 
-      /*
-       * Clear old route before searching
-       * for the new destination.
-       */
-      setSafeRoute(
-        null
-      );
-
-      try {
-        const response =
-          await fetch(
-            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
-              destinationSearch
-            )}`
-          );
-
-        if (!response.ok) {
-          throw new Error(
-            'Destination search failed'
-          );
-        }
-
-        const results =
-          await response.json();
-
-        if (
-          results &&
-          results.length > 0
-        ) {
-          const topResult =
-            results[0];
-
-          const destLat =
-            parseFloat(
-              topResult.lat
-            );
-
-          const destLng =
-            parseFloat(
-              topResult.lon
-            );
-
-          const targetDestination =
-            {
-              id: `destination-${Date.now()}`,
-
-              name:
-                topResult.display_name
-                  .split(',')[0] ||
-                destinationSearch,
-
-              lat: destLat,
-
-              lng: destLng,
-
-              lon: destLng,
-
-              distance:
-                `${calculateDistance(
-                  userCoords.lat,
-                  userCoords.lng,
-                  destLat,
-                  destLng
-                )} km`,
-
-              is_safe: true,
-
-              risk_level:
-                'Destination Selected',
-
-              created_at:
-                new Date().toISOString(),
-
-              full_address:
-                topResult.display_name,
-
-              photoUrl: null,
-
-              isDestination: true,
-            };
-
-          /*
-           * IMPORTANT:
-           * Do NOT replace the selected shelter
-           * with the destination.
-           *
-           * The route target is now the destination.
-           */
-          setRouteTarget(
-            targetDestination
-          );
-
-          /*
-           * Keep selectedShelter for the UI,
-           * but the routing system uses routeTarget.
-           */
-          setSelectedShelter(
-            targetDestination
-          );
-
-          /*
-           * Calculate route using exactly the
-           * same incident avoidance algorithm.
-           */
-          await calculateRouteToTarget(
-            targetDestination
-          );
-        } else {
-          alert(
-            'Location not found. Please try entering a valid city or address.'
-          );
-        }
-      } catch (err) {
-        console.error(
-          'Error searching destination:',
-          err
-        );
-
-        alert(
-          'Failed to search location. Please check your network and try again.'
-        );
-      } finally {
-        setIsSearchingDestination(
-          false
-        );
+      if (!response.ok) {
+        throw new Error('Destination search failed');
       }
-    };
+
+      const results = await response.json();
+
+      if (results && results.length > 0) {
+        const sortedResults = results.sort((a, b) => {
+          const distA = parseFloat(
+            calculateDistance(userCoords.lat, userCoords.lng, parseFloat(a.lat), parseFloat(a.lon))
+          );
+          const distB = parseFloat(
+            calculateDistance(userCoords.lat, userCoords.lng, parseFloat(b.lat), parseFloat(b.lon))
+          );
+          return distA - distB;
+        });
+
+        const topResult = sortedResults[0];
+
+        const destLat = parseFloat(topResult.lat);
+        const destLng = parseFloat(topResult.lon);
+
+        const targetDestination = {
+          id: `destination-${Date.now()}`,
+          name: topResult.display_name.split(',')[0] || destinationSearch,
+          lat: destLat,
+          lng: destLng,
+          lon: destLng,
+          distance: `${calculateDistance(
+            userCoords.lat,
+            userCoords.lng,
+            destLat,
+            destLng
+          )} km`,
+          is_safe: true,
+          risk_level: 'Destination Selected',
+          created_at: new Date().toISOString(),
+          full_address: topResult.display_name,
+          photoUrl: null,
+          isDestination: true,
+        };
+
+        setRouteTarget(targetDestination);
+        setSelectedShelter(targetDestination);
+
+        await calculateRouteToTarget(targetDestination);
+      } else {
+        alert('Location not found. Please try entering a valid city or address.');
+      }
+    } catch (err) {
+      console.error('Error searching destination:', err);
+      alert('Failed to search location. Please check your network and try again.');
+    } finally {
+      setIsSearchingDestination(false);
+    }
+  };
 
   /* =========================================================
      FETCH NEARBY SHELTERS
@@ -2230,11 +1586,6 @@ export default function Dashboard() {
             validShelters
           );
 
-          /*
-           * Only select a shelter automatically
-           * if we currently don't have a searched
-           * destination.
-           */
           if (
             validShelters.length >
               0 &&
@@ -2252,9 +1603,7 @@ export default function Dashboard() {
             );
           }
 
-          /*
-           * Reverse geocode shelters.
-           */
+          /* Reverse geocode addresses */
           validShelters.forEach(
             async (
               shelterItem
@@ -2351,21 +1700,13 @@ export default function Dashboard() {
           isManual
         );
 
-        /*
-         * If a route is already active,
-         * recalculate it from the new location.
-         */
-        if (
-          routeTarget
-        ) {
-          calculateRouteToTarget(
-            routeTarget
-          );
-        }
+        setSafeRoute(null); // INSTANT CLEAR
+        setRouteTarget(null); // INSTANT CLEAR
+        setSelectedShelter(null); // INSTANT CLEAR
+
       },
       [
         fetchNearbyInstitutions,
-        routeTarget,
       ]
     );
 
@@ -2822,94 +2163,7 @@ export default function Dashboard() {
         />
 
         {/* =================================================
-            SELECTED DESTINATION / SHELTER
-        ================================================= */}
-
-        <div
-          className="map-selection"
-          style={{
-            marginTop:
-              '1rem',
-          }}
-        >
-
-          {routeTarget ? (
-            <>
-
-              <strong>
-                {routeTarget.name}
-              </strong>
-
-              <span
-                style={{
-                  margin:
-                    '0 0.5rem',
-                }}
-              >
-                {routeTarget.distance ||
-                  'Destination selected'}
-              </span>
-
-              {!routeTarget.isDestination && (
-                <span
-                  style={{
-                    color:
-                      routeTarget.is_safe
-                        ? '#53b889'
-                        : '#d94a5f',
-                    fontWeight:
-                      'bold',
-                  }}
-                >
-                  {routeTarget.is_safe
-                    ? 'Safe Shelter'
-                    : 'Unsafe Shelter'}
-                  {' '}
-                  (ML Risk:{' '}
-                  {routeTarget.risk_level ||
-                    'N/A'}
-                  )
-                </span>
-              )}
-
-              {routeTarget.isDestination && (
-                <span
-                  style={{
-                    color:
-                      '#60a5fa',
-                    fontWeight:
-                      'bold',
-                  }}
-                >
-                  📍 Destination
-                </span>
-              )}
-
-            </>
-          ) : (
-            <span>
-              {loadingShelters
-                ? 'Analyzing risk levels for local shelters...'
-                : 'Select a shelter or search for a destination'}
-            </span>
-          )}
-
-          <span
-            className="location-status"
-            style={{
-              display:
-                'block',
-              marginTop:
-                '0.25rem',
-            }}
-          >
-            {locationMessage}
-          </span>
-
-        </div>
-
-        {/* =================================================
-            ROUTE INFORMATION
+            ROUTE INFORMATION: KM, DRIVE TIME & WALK TIME
         ================================================= */}
 
         {safeRoute && (
@@ -2918,165 +2172,113 @@ export default function Dashboard() {
               marginTop:
                 '1rem',
               padding:
-                '14px 16px',
+                '14px 18px',
               borderRadius:
                 '10px',
               background:
                 'rgba(37, 99, 235, 0.10)',
               border:
                 '1px solid rgba(37, 99, 235, 0.35)',
+              display: 'flex',
+              justifyContent: 'space-around',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '16px',
             }}
           >
-
-            <div
-              style={{
-                display:
-                  'flex',
-                justifyContent:
-                  'space-between',
-                alignItems:
-                  'center',
-                flexWrap:
-                  'wrap',
-                gap:
-                  '12px',
-              }}
-            >
-
-              <div>
-
-                <div
-                  style={{
-                    fontSize:
-                      '0.8rem',
-                    color:
-                      '#94a3b8',
-                    marginBottom:
-                      '4px',
-                  }}
-                >
-                  ROUTE
-                </div>
-
-                <div
-                  style={{
-                    fontSize:
-                      '1.1rem',
-                    fontWeight:
-                      'bold',
-                  }}
-                >
-                  🛣️{' '}
-                  {safeRoute.distance}{' '}
-                  km
-                </div>
-
-              </div>
-
-              <div>
-
-                <div
-                  style={{
-                    fontSize:
-                      '0.8rem',
-                    color:
-                      '#94a3b8',
-                    marginBottom:
-                      '4px',
-                  }}
-                >
-                  ESTIMATED TIME
-                </div>
-
-                <div
-                  style={{
-                    fontSize:
-                      '1.1rem',
-                    fontWeight:
-                      'bold',
-                  }}
-                >
-                  ⏱️{' '}
-                  {safeRoute.durationText ||
-                    formatRouteTime(
-                      safeRoute.duration
-                    )}
-                </div>
-
-              </div>
-
-              <div>
-
-                <div
-                  style={{
-                    fontSize:
-                      '0.8rem',
-                    color:
-                      '#94a3b8',
-                    marginBottom:
-                      '4px',
-                  }}
-                >
-                  ROUTE STATUS
-                </div>
-
-                <div
-                  style={{
-                    fontSize:
-                      '0.95rem',
-                    fontWeight:
-                      'bold',
-                    color:
-                      safeRoute.wasSafe
-                        ? '#53b889'
-                        : '#f59e0b',
-                  }}
-                >
-                  {safeRoute.wasSafe
-                    ? '✓ Incidents avoided'
-                    : '⚠️ Best available route'}
-                </div>
-
-              </div>
-
-            </div>
-
-            {safeRoute.incidentCount >
-              0 && (
+            <div style={{ textAlign: 'center' }}>
               <div
                 style={{
-                  marginTop:
-                    '10px',
-                  paddingTop:
-                    '10px',
-                  borderTop:
-                    '1px solid rgba(255,255,255,0.1)',
-                  fontSize:
-                    '0.85rem',
-                  color:
-                    '#cbd5e1',
+                  fontSize: '0.8rem',
+                  color: '#94a3b8',
+                  marginBottom: '4px',
                 }}
               >
-                🚨 Verified incidents were
-                considered while calculating
-                this route.
+                DISTANCE
               </div>
-            )}
+              <div
+                style={{
+                  fontSize: '1.15rem',
+                  fontWeight: 'bold',
+                  color: '#ffffff',
+                }}
+              >
+                🛣 {safeRoute.distance} km
+              </div>
+            </div>
 
+            <div style={{ textAlign: 'center' }}>
+              <div
+                style={{
+                  fontSize: '0.8rem',
+                  color: '#94a3b8',
+                  marginBottom: '4px',
+                }}
+              >
+                DRIVE TIME
+              </div>
+              <div
+                style={{
+                  fontSize: '1.15rem',
+                  fontWeight: 'bold',
+                  color: '#60a5fa',
+                }}
+              >
+                🚗 {safeRoute.driveTimeText}
+              </div>
+            </div>
+
+            <div style={{ textAlign: 'center' }}>
+              <div
+                style={{
+                  fontSize: '0.8rem',
+                  color: '#94a3b8',
+                  marginBottom: '4px',
+                }}
+              >
+                WALK TIME
+              </div>
+              <div
+                style={{
+                  fontSize: '1.15rem',
+                  fontWeight: 'bold',
+                  color: '#34d399',
+                }}
+              >
+                🚶 {safeRoute.walkTimeText}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setSafeRoute(null)}
+              style={{
+                background: 'transparent',
+                border: '1px solid rgba(255, 255, 255, 0.25)',
+                color: '#ffffff',
+                borderRadius: '6px',
+                padding: '6px 12px',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+              }}
+            >
+              Clear Route
+            </button>
           </div>
         )}
 
         {/* =================================================
-            DIRECTIONS BUTTON
+            DIRECTIONS & ADD ACTIONS
         ================================================= */}
 
         <div
           style={{
-            marginTop:
-              '1rem',
+            display: 'flex',
+            gap: '12px',
+            marginTop: '1rem',
+            flexWrap: 'wrap',
           }}
         >
-
           <button
             onClick={
               handleShowDirections
@@ -3118,19 +2320,49 @@ export default function Dashboard() {
                 '8px',
               boxShadow:
                 '0 4px 12px rgba(16, 185, 129, 0.3)',
-              width:
-                '100%',
+              flex: 1,
               fontSize:
                 '1rem',
             }}
           >
-
             {isCalculatingRoute
-              ? '🔄 Calculating Safest Shortest Route...'
-              : '🗺️ Show Directions'}
-
+              ? '🔄 Calculating Detour Around Incident...'
+              : '🗺 Show Directions'}
           </button>
 
+          <button
+            onClick={() =>
+              setIsModalOpen(
+                true
+              )
+            }
+            style={{
+              backgroundColor:
+                '#2563eb',
+              color:
+                '#ffffff',
+              border:
+                'none',
+              padding:
+                '12px 20px',
+              borderRadius:
+                '8px',
+              fontWeight:
+                'bold',
+              cursor:
+                'pointer',
+              display:
+                'flex',
+              alignItems:
+                'center',
+              gap:
+                '8px',
+              boxShadow:
+                '0 4px 12px rgba(37, 99, 235, 0.3)',
+            }}
+          >
+            ➕ Report / Add Shelter
+          </button>
         </div>
 
       </section>
@@ -3176,40 +2408,6 @@ export default function Dashboard() {
             </span>
 
           </div>
-
-          <button
-            onClick={() =>
-              setIsModalOpen(
-                true
-              )
-            }
-            style={{
-              backgroundColor:
-                '#2563eb',
-              color:
-                '#ffffff',
-              border:
-                'none',
-              padding:
-                '10px 18px',
-              borderRadius:
-                '8px',
-              fontWeight:
-                'bold',
-              cursor:
-                'pointer',
-              display:
-                'flex',
-              alignItems:
-                'center',
-              gap:
-                '8px',
-              boxShadow:
-                '0 4px 12px rgba(37, 99, 235, 0.3)',
-            }}
-          >
-            ➕ Report / Add Shelter
-          </button>
 
         </div>
 
