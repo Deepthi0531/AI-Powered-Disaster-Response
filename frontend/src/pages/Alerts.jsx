@@ -54,8 +54,6 @@ export default function Alerts() {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const centerMarkerRef = useRef(null);
-
-  // Stores incident map markers by incident id.
   const incidentMarkersRef = useRef({});
 
   const BACKEND_BASE_URL = 'http://127.0.0.1:5000';
@@ -81,7 +79,6 @@ export default function Alerts() {
   const fetchAddressName = async (incident) => {
     const id = incident._id || incident.id;
 
-    // New incidents already have the address saved in MongoDB.
     if (incident.location_name) {
       setAddressMap((previous) => ({
         ...previous,
@@ -125,10 +122,17 @@ export default function Alerts() {
           state_district ||
           'Unknown Area';
 
-        const cityName = city || town || village || state_district || '';
+        const cityName =
+          city ||
+          town ||
+          village ||
+          state_district ||
+          '';
 
         const displayName =
-          cityName && area !== cityName ? `${area}, ${cityName}` : area;
+          cityName && area !== cityName
+            ? `${area}, ${cityName}`
+            : area;
 
         setAddressMap((previous) => ({
           ...previous,
@@ -148,7 +152,10 @@ export default function Alerts() {
         const data = response.data.data || [];
 
         setIncidents(data);
-        data.forEach((incident) => fetchAddressName(incident));
+
+        data.forEach((incident) => {
+          fetchAddressName(incident);
+        });
       })
       .catch((error) => {
         console.error('Failed to load incidents:', error);
@@ -232,7 +239,10 @@ export default function Alerts() {
     const map = mapRef.current;
 
     if (userLocation) {
-      const position = [userLocation.lat, userLocation.lng];
+      const position = [
+        userLocation.lat,
+        userLocation.lng,
+      ];
 
       if (centerMarkerRef.current) {
         centerMarkerRef.current.setLatLng(position);
@@ -246,18 +256,21 @@ export default function Alerts() {
           '<b>Selected Location</b>'
         );
 
-        centerMarkerRef.current.on('dragend', (event) => {
-          const newPosition = event.target.getLatLng();
+        centerMarkerRef.current.on(
+          'dragend',
+          (event) => {
+            const newPosition = event.target.getLatLng();
 
-          setUserLocation({
-            lat: Number(newPosition.lat.toFixed(6)),
-            lng: Number(newPosition.lng.toFixed(6)),
-          });
+            setUserLocation({
+              lat: Number(newPosition.lat.toFixed(6)),
+              lng: Number(newPosition.lng.toFixed(6)),
+            });
 
-          setLocationStatus(
-            'Showing incidents within 15 km of the selected map point.'
-          );
-        });
+            setLocationStatus(
+              'Showing incidents within 15 km of the selected map point.'
+            );
+          }
+        );
       }
 
       map.setView(position, 11);
@@ -288,7 +301,9 @@ export default function Alerts() {
       .map((incident) => {
         const coordinates = incident.location?.coordinates;
 
-        if (!coordinates || coordinates.length < 2) return null;
+        if (!coordinates || coordinates.length < 2) {
+          return null;
+        }
 
         const distance = getDistanceKm(
           userLocation.lat,
@@ -307,7 +322,10 @@ export default function Alerts() {
           incident &&
           incident.distanceKm <= 15
       )
-      .sort((first, second) => first.distanceKm - second.distanceKm);
+      .sort(
+        (first, second) =>
+          first.distanceKm - second.distanceKm
+      );
 
     setNearbyIncidents(filteredIncidents);
 
@@ -315,9 +333,11 @@ export default function Alerts() {
 
     if (!map) return;
 
-    Object.values(incidentMarkersRef.current).forEach((marker) => {
-      marker.remove();
-    });
+    Object.values(incidentMarkersRef.current).forEach(
+      (marker) => {
+        marker.remove();
+      }
+    );
 
     incidentMarkersRef.current = {};
 
@@ -348,12 +368,15 @@ export default function Alerts() {
     });
   }, [incidents, userLocation]);
 
-  // Clicking an address focuses the already visible Leaflet map.
   const focusIncidentOnMap = (incident) => {
     const incidentId = incident._id || incident.id;
     const coordinates = incident.location?.coordinates;
 
-    if (!coordinates || coordinates.length < 2 || !mapRef.current) {
+    if (
+      !coordinates ||
+      coordinates.length < 2 ||
+      !mapRef.current
+    ) {
       alert('Map location is unavailable for this incident.');
       return;
     }
@@ -361,9 +384,13 @@ export default function Alerts() {
     const lat = coordinates[1];
     const lng = coordinates[0];
 
-    mapRef.current.setView([lat, lng], 16, {
-      animate: true,
-    });
+    mapRef.current.setView(
+      [lat, lng],
+      16,
+      {
+        animate: true,
+      }
+    );
 
     const marker = incidentMarkersRef.current[incidentId];
 
@@ -411,8 +438,7 @@ export default function Alerts() {
       setResolvingId(null);
       setProofFile(null);
 
-      // CV approved only: remove the now-resolved incident from active alerts.
-      if (result.resolved) {
+      if (result.resolved === true) {
         setIncidents((previous) =>
           previous.filter(
             (incident) =>
@@ -423,7 +449,6 @@ export default function Alerts() {
     } catch (error) {
       const result = error.response?.data;
 
-      // CV rejected or uncertain image: keep incident active.
       alert(
         result?.message ||
         'Computer vision could not verify this proof image.'
@@ -499,7 +524,9 @@ export default function Alerts() {
               fontSize: '0.95rem',
             }}
           >
-            📍 Interactive Filter Map (Click anywhere to search 15 km area):
+            📍 Interactive Filter Map
+            {' '}
+            (Click anywhere to search 15 km area):
           </label>
 
           {userLocation && (
@@ -569,7 +596,9 @@ export default function Alerts() {
           </p>
         ) : nearbyIncidents.length === 0 ? (
           <p style={{ color: '#53b889' }}>
-            No severe incidents reported within 15 km of your selected location.
+            No severe incidents reported within 15 km
+            {' '}
+            of your selected location.
           </p>
         ) : (
           <div
@@ -583,7 +612,9 @@ export default function Alerts() {
 
               const borderLeftColor =
                 incident.severity === 'High' ||
-                incident.type?.toLowerCase().includes('flood')
+                incident.type
+                  ?.toLowerCase()
+                  .includes('flood')
                   ? '#ef6a55'
                   : incident.severity === 'Medium'
                     ? '#e6b84b'
@@ -682,7 +713,9 @@ export default function Alerts() {
                               whiteSpace: 'nowrap',
                             }}
                           >
-                            {incident.distanceKm.toFixed(1)} km away
+                            {incident.distanceKm.toFixed(1)}
+                            {' '}
+                            km away
                           </span>
                         )}
                       </div>
@@ -713,11 +746,14 @@ export default function Alerts() {
                         <div>
                           <strong style={{ color: '#e5e7eb' }}>
                             📍 Location:
-                          </strong>{' '}
+                          </strong>
+                          {' '}
 
                           <button
                             type="button"
-                            onClick={() => focusIncidentOnMap(incident)}
+                            onClick={() =>
+                              focusIncidentOnMap(incident)
+                            }
                             title="Show this incident on the map"
                             style={{
                               background: 'none',
@@ -736,16 +772,21 @@ export default function Alerts() {
                         <div>
                           <strong style={{ color: '#e5e7eb' }}>
                             📅 Date & Time:
-                          </strong>{' '}
+                          </strong>
+                          {' '}
+
                           {formatDateTime(
-                            incident.created_at || incident.createdAt
+                            incident.created_at ||
+                            incident.createdAt
                           )}
                         </div>
 
                         <div>
                           <strong style={{ color: '#e5e7eb' }}>
                             ⚡ Status:
-                          </strong>{' '}
+                          </strong>
+                          {' '}
+
                           <span
                             style={{
                               color: '#f59e0b',
@@ -788,14 +829,18 @@ export default function Alerts() {
                             fontWeight: '500',
                           }}
                         >
-                          Upload a clear proof image of the resolved hazard.
+                          Upload a clear proof image of
+                          {' '}
+                          the resolved hazard.
                         </label>
 
                         <input
                           type="file"
                           accept="image/png,image/jpeg,image/webp"
                           onChange={(event) => {
-                            setProofFile(event.target.files[0]);
+                            setProofFile(
+                              event.target.files?.[0] || null
+                            );
                           }}
                           style={{
                             color: '#9ca3af',
@@ -832,7 +877,9 @@ export default function Alerts() {
 
                           <button
                             type="button"
-                            onClick={() => handleResolveIncident(incidentId)}
+                            onClick={() =>
+                              handleResolveIncident(incidentId)
+                            }
                             disabled={resolvingLoading}
                             style={{
                               padding: '0.35rem 0.75rem',
