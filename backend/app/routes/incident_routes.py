@@ -23,17 +23,6 @@ UPLOAD_FOLDER = os.path.join(
 )
 
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
-
-ALLOWED_INCIDENT_TYPES = [
-    "Flood",
-    "Blocked Road",
-    "Structural Damage",
-    "Landslide",
-    "Fire",
-    "Fallen Tree",
-    "Other",
-]
-
 INCIDENT_MATCH_RADIUS_METERS = 100
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -42,8 +31,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 def allowed_file(filename):
     return (
         "." in filename
-        and filename.rsplit(".", 1)[1].lower()
-        in ALLOWED_EXTENSIONS
+        and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
     )
 
 
@@ -52,7 +40,6 @@ def calculate_distance_meters(lat1, lon1, lat2, lon2):
 
     lat1_rad = math.radians(lat1)
     lat2_rad = math.radians(lat2)
-
     delta_lat = math.radians(lat2 - lat1)
     delta_lon = math.radians(lon2 - lon1)
 
@@ -63,11 +50,7 @@ def calculate_distance_meters(lat1, lon1, lat2, lon2):
         * math.sin(delta_lon / 2) ** 2
     )
 
-    c = 2 * math.atan2(
-        math.sqrt(a),
-        math.sqrt(1 - a),
-    )
-
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return earth_radius * c
 
 
@@ -82,6 +65,8 @@ def get_community_confidence(upcount):
 
 
 def get_readable_location(latitude, longitude):
+    """Convert GPS coordinates into a readable address."""
+
     try:
         response = requests.get(
             "https://nominatim.openstreetmap.org/reverse",
@@ -97,10 +82,8 @@ def get_readable_location(latitude, longitude):
         )
 
         if response.status_code == 200:
-            return response.json().get(
-                "display_name",
-                "Location unavailable",
-            )
+            data = response.json()
+            return data.get("display_name", "Location unavailable")
 
     except Exception as error:
         print(f"Location lookup error: {error}")
@@ -109,34 +92,25 @@ def get_readable_location(latitude, longitude):
 
 
 def serialize_incident(incident):
+    """Convert MongoDB ObjectId values into text for API responses."""
     incident["_id"] = str(incident["_id"])
     return incident
 
 
 def get_incident_query(incident_id):
+    """Create a safe query for a MongoDB incident ID."""
     if ObjectId.is_valid(incident_id):
-        return {
-            "_id": ObjectId(incident_id),
-        }
+        return {"_id": ObjectId(incident_id)}
 
-    return {
-        "_id": incident_id,
-    }
-
-
-def delete_file_safely(filepath):
-    try:
-        if filepath and os.path.exists(filepath):
-            os.remove(filepath)
-    except Exception as error:
-        print(f"Could not delete file: {error}")
+    return {"_id": incident_id}
 
 
 def init_incident_routes(db):
-    incident_bp = Blueprint(
-        "incident_bp",
-        __name__,
-    )
+    incident_bp = Blueprint("incident_bp", __name__)
+
+    # --------------------------------------------------
+    # Citizen reports a new incident
+    # --------------------------------------------------
 
     @incident_bp.route("/incidents/report", methods=["POST"])
     def report_incident():
@@ -157,39 +131,35 @@ def init_incident_routes(db):
         if not allowed_file(file.filename):
             return jsonify({
                 "status": "error",
-                "message": (
-                    "Only JPG, JPEG, PNG, and WEBP "
-                    "images are allowed."
-                ),
+                "message": "Only JPG, JPEG, PNG, and WEBP images are allowed.",
             }), 400
 
         incident_type = request.form.get("type", "Flood")
 
-        if incident_type not in ALLOWED_INCIDENT_TYPES:
+        allowed_incident_types = [
+            "Flood",
+            "Blocked Road",
+            "Structural Damage",
+            "Landslide",
+            "Fire",
+            "Fallen Tree",
+            "Other",
+        ]
+
+        if incident_type not in allowed_incident_types:
             return jsonify({
                 "status": "error",
                 "message": "Invalid incident type.",
             }), 400
 
-        description = request.form.get(
-            "description",
-            "",
-        ).strip()
-
+        description = request.form.get("description", "").strip()
         severity = request.form.get("severity", "Medium")
-
-        reporter_id = request.form.get(
-            "reporter_id",
-            "anonymous",
-        )
+        reporter_id = request.form.get("reporter_id", "anonymous")
 
         if len(description) > 500:
             return jsonify({
                 "status": "error",
-                "message": (
-                    "Description must be 500 characters "
-                    "or fewer."
-                ),
+                "message": "Description must be 500 characters or fewer.",
             }), 400
 
         if severity not in ["Low", "Medium", "High"]:
@@ -210,67 +180,29 @@ def init_incident_routes(db):
         try:
             latitude = float(latitude)
             longitude = float(longitude)
-
         except (TypeError, ValueError):
             return jsonify({
                 "status": "error",
                 "message": "Invalid location coordinates.",
             }), 400
 
-        if not (
-            -90 <= latitude <= 90
-            and -180 <= longitude <= 180
-        ):
+        if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
             return jsonify({
                 "status": "error",
-                "message": (
-                    "Location coordinates are outside "
-                    "the valid range."
-                ),
+                "message": "Location coordinates are outside the valid range.",
             }), 400
 
         original_filename = secure_filename(file.filename)
-
-        if not original_filename:
-            return jsonify({
-                "status": "error",
-                "message": "Invalid image filename.",
-            }), 400
-
         filename = f"{uuid.uuid4().hex}_{original_filename}"
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
 
-        filepath = os.path.join(
-            UPLOAD_FOLDER,
-            filename,
-        )
+        file.save(filepath)
 
-        try:
-            file.save(filepath)
-
-        except Exception as error:
-            return jsonify({
-                "status": "error",
-                "message": "Could not save uploaded image.",
-                "error": str(error),
-            }), 500
-
-        try:
-            cv_result = verify_incident_image(filepath)
-
-        except Exception as error:
-            delete_file_safely(filepath)
-
-            return jsonify({
-                "status": "error",
-                "message": (
-                    "Computer Vision could not process "
-                    "the incident image."
-                ),
-                "error": str(error),
-            }), 500
+        cv_result = verify_incident_image(filepath)
 
         if cv_result.get("status") == "invalid_image":
-            delete_file_safely(filepath)
+            if os.path.exists(filepath):
+                os.remove(filepath)
 
             return jsonify({
                 "status": "error",
@@ -286,10 +218,7 @@ def init_incident_routes(db):
             incident_type,
         )
 
-        location_name = get_readable_location(
-            latitude,
-            longitude,
-        )
+        location_name = get_readable_location(latitude, longitude)
 
         incident_status = "PENDING"
         cv_result["status"] = "pending_review"
@@ -321,54 +250,45 @@ def init_incident_routes(db):
             )
 
             if distance <= INCIDENT_MATCH_RADIUS_METERS:
-                new_upcount = (
-                    existing_incident.get("upcount", 1) + 1
-                )
-
-                community_confidence = (
-                    get_community_confidence(new_upcount)
-                )
+                new_upcount = existing_incident.get("upcount", 1) + 1
+                community_confidence = get_community_confidence(new_upcount)
 
                 db.incidents.update_one(
-                    {
-                        "_id": existing_incident["_id"],
-                    },
+                    {"_id": existing_incident["_id"]},
                     {
                         "$set": {
                             "upcount": new_upcount,
-                            "community_confidence":
-                                community_confidence,
+                            "community_confidence": community_confidence,
+                            "location_name": existing_incident.get(
+                                "location_name",
+                                location_name,
+                            ),
                             "updated_at": datetime.utcnow(),
                         }
                     },
                 )
 
-                delete_file_safely(filepath)
+                if os.path.exists(filepath):
+                    os.remove(filepath)
 
                 return jsonify({
                     "status": "success",
                     "message": (
-                        "This incident was already reported "
-                        "nearby. Your report was counted "
-                        "as a confirmation."
+                        "This incident was already reported nearby. "
+                        "Your report was counted as a confirmation."
                     ),
-                    "incident_id": str(
-                        existing_incident["_id"]
-                    ),
+                    "incident_id": str(existing_incident["_id"]),
                     "duplicate": True,
                     "upcount": new_upcount,
-                    "community_confidence":
-                        community_confidence,
-                    "matching_distance_meters":
-                        round(distance, 2),
+                    "community_confidence": community_confidence,
+                    "matching_distance_meters": round(distance, 2),
                     "verification": {
                         "cv": cv_result,
                         "weather": weather_result,
-                        "overall_status":
-                            existing_incident.get(
-                                "status",
-                                "PENDING",
-                            ),
+                        "overall_status": existing_incident.get(
+                            "status",
+                            "PENDING",
+                        ),
                     },
                 }), 200
 
@@ -382,10 +302,7 @@ def init_incident_routes(db):
             "location_name": location_name,
             "location": {
                 "type": "Point",
-                "coordinates": [
-                    longitude,
-                    latitude,
-                ],
+                "coordinates": [longitude, latitude],
             },
             "image_details": {
                 "format": cv_result.get("image_format"),
@@ -393,10 +310,7 @@ def init_incident_routes(db):
                 "height": cv_result.get("image_height"),
             },
             "cv_verification": {
-                "status": cv_result.get(
-                    "status",
-                    "pending_review",
-                ),
+                "status": cv_result.get("status", "pending_review"),
                 "confidence_score": cv_result.get(
                     "confidence_score",
                     0.0,
@@ -405,10 +319,7 @@ def init_incident_routes(db):
                     "detected_labels",
                     [],
                 ),
-                "detections": cv_result.get(
-                    "detections",
-                    [],
-                ),
+                "detections": cv_result.get("detections", []),
                 "model": cv_result.get(
                     "model",
                     "Computer Vision Classifier",
@@ -424,9 +335,7 @@ def init_incident_routes(db):
             "updated_at": datetime.utcnow(),
         }
 
-        inserted_id = db.incidents.insert_one(
-            incident_doc
-        ).inserted_id
+        inserted_id = db.incidents.insert_one(incident_doc).inserted_id
 
         return jsonify({
             "status": "success",
@@ -440,10 +349,11 @@ def init_incident_routes(db):
             },
         }), 201
 
-    @incident_bp.route(
-        "/incidents/verified",
-        methods=["GET"],
-    )
+    # --------------------------------------------------
+    # Alerts page gets verified active incidents only
+    # --------------------------------------------------
+
+    @incident_bp.route("/incidents/verified", methods=["GET"])
     def get_verified_incidents():
         incidents = list(db.incidents.find({
             "status": "VERIFIED",
@@ -457,11 +367,20 @@ def init_incident_routes(db):
             "data": incidents,
         }), 200
 
-    @incident_bp.route(
-        "/incidents/resolve/<incident_id>",
-        methods=["POST"],
-    )
+    # --------------------------------------------------
+    # Automatic CV resolution-proof verification
+    # --------------------------------------------------
+
+    @incident_bp.route("/incidents/resolve/<incident_id>", methods=["POST"])
     def resolve_incident(incident_id):
+        """
+        CV checks the uploaded proof for the original incident type.
+
+        approved         -> automatically changes incident to RESOLVED
+        rejected         -> remains VERIFIED / active
+        needs_new_proof  -> remains VERIFIED / active
+        """
+
         try:
             if (
                 "proof_image" not in request.files
@@ -469,9 +388,7 @@ def init_incident_routes(db):
             ):
                 return jsonify({
                     "status": "error",
-                    "message": (
-                        "Resolution proof image is required."
-                    ),
+                    "message": "Resolution proof image is required.",
                 }), 400
 
             file = (
@@ -489,65 +406,45 @@ def init_incident_routes(db):
                 return jsonify({
                     "status": "error",
                     "message": (
-                        "Only JPG, JPEG, PNG, and WEBP "
-                        "proof images are allowed."
+                        "Only JPG, JPEG, PNG, and WEBP proof images "
+                        "are allowed."
                     ),
                 }), 400
 
             query_filter = get_incident_query(incident_id)
-
-            existing_incident = db.incidents.find_one(
-                query_filter
-            )
+            existing_incident = db.incidents.find_one(query_filter)
 
             if not existing_incident:
                 return jsonify({
                     "status": "error",
-                    "message": (
-                        "Incident not found in database."
-                    ),
+                    "message": "Incident not found in database.",
                 }), 404
 
             if existing_incident.get("status") == "RESOLVED":
                 return jsonify({
                     "status": "error",
-                    "message": (
-                        "This incident is already resolved."
-                    ),
+                    "message": "This incident is already resolved.",
                 }), 400
 
             original_filename = secure_filename(file.filename)
-
-            if not original_filename:
-                return jsonify({
-                    "status": "error",
-                    "message": "Invalid proof image filename.",
-                }), 400
-
-            filename = (
-                f"proof_{uuid.uuid4().hex}_"
-                f"{original_filename}"
-            )
-
-            filepath = os.path.join(
-                UPLOAD_FOLDER,
-                filename,
-            )
+            filename = f"proof_{uuid.uuid4().hex}_{original_filename}"
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
 
             file.save(filepath)
 
-            incident_type = existing_incident.get(
-                "type",
-                "Other",
-            )
+            incident_type = existing_incident.get("type", "Other")
 
+            # CV automatically checks if this proof matches the incident type
+            # and whether the hazard appears cleared.
             proof_result = verify_resolution_proof(
                 filepath,
                 incident_type,
             )
 
+            # A broken/non-image file is removed.
             if proof_result.get("status") == "invalid_image":
-                delete_file_safely(filepath)
+                if os.path.exists(filepath):
+                    os.remove(filepath)
 
                 return jsonify({
                     "status": "error",
@@ -565,6 +462,8 @@ def init_incident_routes(db):
                 "verification": proof_result,
             }
 
+            # Do NOT delete the incident.
+            # Keep proof history in MongoDB for transparent CV evidence.
             db.incidents.update_one(
                 query_filter,
                 {
@@ -572,13 +471,14 @@ def init_incident_routes(db):
                         "resolution_proofs": proof_document,
                     },
                     "$set": {
-                        "last_resolution_proof":
-                            proof_document,
+                        "last_resolution_proof": proof_document,
                         "updated_at": datetime.utcnow(),
                     },
                 },
             )
 
+            # High-confidence resolved scene:
+            # Automatically close the incident without admin approval.
             if proof_result.get("status") == "approved":
                 db.incidents.update_one(
                     query_filter,
@@ -590,9 +490,7 @@ def init_incident_routes(db):
                                 "Automatic Computer Vision "
                                 "proof verification"
                             ),
-                            "resolution_cv_verification":
-                                proof_result,
-                            "last_proof_status": "APPROVED",
+                            "resolution_cv_verification": proof_result,
                             "updated_at": datetime.utcnow(),
                         }
                     },
@@ -603,15 +501,14 @@ def init_incident_routes(db):
                     "resolved": True,
                     "message": proof_result.get(
                         "message",
-                        (
-                            "Proof accepted. Incident "
-                            "automatically resolved."
-                        ),
+                        "Proof accepted. Incident automatically resolved.",
                     ),
                     "proof_url": f"uploads/{filename}",
                     "verification": proof_result,
                 }), 200
 
+            # Unrelated image or active hazard remains:
+            # do NOT resolve the incident.
             if proof_result.get("status") == "rejected":
                 db.incidents.update_one(
                     query_filter,
@@ -622,14 +519,10 @@ def init_incident_routes(db):
                                 "VERIFIED",
                             ),
                             "last_proof_status": "REJECTED",
-                            "last_proof_rejection_reason":
-                                proof_result.get(
-                                    "message",
-                                    (
-                                        "Proof rejected by "
-                                        "computer vision."
-                                    ),
-                                ),
+                            "last_proof_rejection_reason": proof_result.get(
+                                "message",
+                                "Proof rejected by computer vision.",
+                            ),
                             "updated_at": datetime.utcnow(),
                         }
                     },
@@ -640,15 +533,14 @@ def init_incident_routes(db):
                     "resolved": False,
                     "message": proof_result.get(
                         "message",
-                        (
-                            "Proof rejected. Incident "
-                            "remains active."
-                        ),
+                        "Proof rejected. Incident remains active.",
                     ),
                     "proof_url": f"uploads/{filename}",
                     "verification": proof_result,
                 }), 422
 
+            # CV could not confidently prove the scene is resolved:
+            # incident remains active and citizen must send better proof.
             db.incidents.update_one(
                 query_filter,
                 {
@@ -657,8 +549,7 @@ def init_incident_routes(db):
                             "status",
                             "VERIFIED",
                         ),
-                        "last_proof_status":
-                            "NEEDS_NEW_PROOF",
+                        "last_proof_status": "NEEDS_NEW_PROOF",
                         "updated_at": datetime.utcnow(),
                     }
                 },
@@ -669,10 +560,7 @@ def init_incident_routes(db):
                 "resolved": False,
                 "message": proof_result.get(
                     "message",
-                    (
-                        "Proof was unclear. Upload a "
-                        "clearer image."
-                    ),
+                    "Proof was unclear. Upload a clearer image.",
                 ),
                 "proof_url": f"uploads/{filename}",
                 "verification": proof_result,
@@ -684,10 +572,11 @@ def init_incident_routes(db):
                 "message": str(error),
             }), 500
 
-    @incident_bp.route(
-        "/predict-shelters-risk",
-        methods=["POST"],
-    )
+    # --------------------------------------------------
+    # Existing shelter risk route
+    # --------------------------------------------------
+
+    @incident_bp.route("/predict-shelters-risk", methods=["POST"])
     def predict_shelter_risk():
         try:
             shelters = list(db.shelters.find({}))
