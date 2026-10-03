@@ -25,7 +25,10 @@ try:
         AutoProcessor,
     )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu"
+    )
+
     CV_MODEL_LOADED = True
 
 except Exception as error:
@@ -52,17 +55,74 @@ INCIDENT_TYPES = [
     "No Incident",
 ]
 
-INCIDENT_PROMPTS = [
-    "a photo of flood water, waterlogging, or a flooded road",
-    "a photo of a blocked road with debris, rocks, or obstacles",
-    "a photo of structural damage or a collapsed building",
-    "a photo of a landslide, mudslide, rocks, or mud on a road",
-    "a photo of fire, flames, wildfire, or a burning building",
-    "a photo of a fallen tree blocking a road",
-    "a photo of another natural disaster or emergency",
-    "a normal image with no disaster and no emergency",
+
+# ============================================================
+# INCIDENT CLASSIFICATION PROMPTS
+#
+# IMPORTANT:
+# This classification is independent of the original
+# incident type.
+#
+# Therefore:
+#
+# Blocked Road incident + Flood image
+#
+# can actually become:
+#
+# detected_type = Flood
+#
+# instead of being forced into "Blocked Road".
+# ============================================================
+
+INCIDENT_TYPE_PROMPTS = [
+
+    (
+        "a photograph showing flood water, flooding, "
+        "waterlogging, submerged roads, or a flooded area"
+    ),
+
+    (
+        "a photograph showing a road blocked by debris, "
+        "rocks, vehicles, objects, rubble, or obstacles"
+    ),
+
+    (
+        "a photograph showing structural damage, "
+        "a damaged building, collapsed building, "
+        "broken structure, or unsafe building"
+    ),
+
+    (
+        "a photograph showing a landslide, mudslide, "
+        "mud, rocks, soil, or landslide debris"
+    ),
+
+    (
+        "a photograph showing fire, flames, smoke from fire, "
+        "a burning building, wildfire, or another active fire"
+    ),
+
+    (
+        "a photograph showing a fallen tree, "
+        "tree lying across a road, path, vehicle, or building"
+    ),
+
+    (
+        "a photograph showing another natural disaster, "
+        "emergency, accident, or dangerous situation"
+    ),
+
+    (
+        "a normal safe scene with no flood, no blocked road, "
+        "no structural damage, no landslide, no fire, "
+        "no fallen tree, and no visible emergency"
+    ),
 ]
 
+
+# ============================================================
+# RESOLUTION PROMPTS
+# ============================================================
 
 RESOLUTION_PROMPTS = {
 
@@ -71,15 +131,15 @@ RESOLUTION_PROMPTS = {
         "labels": [
             "Clear flood scene",
             "Active flood",
-            "Road closed or blocked",
             "Unrelated random image",
         ],
 
         "prompts": [
 
             (
-                "a normal dry house, dry road, clear street, green lawn, "
-                "or safe area with no flood water and no waterlogging"
+                "a normal dry area, dry road, dry house, "
+                "clear street, or safe area with no flood water "
+                "and no waterlogging"
             ),
 
             (
@@ -87,80 +147,92 @@ RESOLUTION_PROMPTS = {
                 "waterlogging, submerged roads, "
                 "or a flooded area"
             ),
+
             (
-                "a cat, dog, pet, selfie, food, document, screenshot, "
-                "or unrelated random object"
+                "a cat, dog, pet, selfie, food, document, "
+                "screenshot, indoor object, or unrelated "
+                "random image"
             ),
         ],
     },
+
+
     "Blocked Road": {
 
         "labels": [
             "Clear blocked road scene",
             "Active blocked road",
-            "Road closed or blocked",
             "Unrelated random image",
         ],
 
         "prompts": [
 
             (
-                "a clear open road, normal dry street, normal house, "
-                "or safe area with no debris and no obstruction"
+                "a clear open road with no debris, "
+                "no rocks, no fallen objects, no blockage, "
+                "and vehicles able to pass normally"
             ),
 
             (
-                "a road blocked by debris, rocks, vehicles, "
-                "fallen objects, or obstacles"
+                "a road blocked by debris, rocks, rubble, "
+                "vehicles, fallen objects, tree branches, "
+                "mud, or other obstacles"
             ),
 
             (
-                "a cat, dog, pet, selfie, food, document, screenshot, "
-                "or unrelated random object"
+                "a cat, dog, pet, selfie, food, document, "
+                "screenshot, indoor object, or unrelated "
+                "random image"
             ),
         ],
     },
+
+
     "Structural Damage": {
 
         "labels": [
             "Clear structural damage scene",
             "Active structural damage",
-            "Road closed or blocked",
             "Unrelated random image",
         ],
 
         "prompts": [
 
             (
-                "a normal safe house, repaired building, undamaged building, "
-                "or clear safe area with no structural damage"
+                "a normal safe building, repaired building, "
+                "undamaged building, intact walls, intact roof, "
+                "or safe area with no structural damage"
             ),
 
             (
-                "a damaged building, collapsed building, broken structure, "
+                "a damaged building, collapsed building, "
+                "broken walls, damaged roof, broken structure, "
                 "or unsafe structural damage"
             ),
 
             (
-                "a cat, dog, pet, selfie, food, document, screenshot, "
-                "or unrelated random object"
+                "a cat, dog, pet, selfie, food, document, "
+                "screenshot, indoor object, or unrelated "
+                "random image"
             ),
         ],
     },
+
+
     "Landslide": {
 
         "labels": [
             "Clear landslide scene",
             "Active landslide",
-            "Road closed or blocked",
             "Unrelated random image",
         ],
 
         "prompts": [
 
             (
-                "a clear road, normal dry street, normal house, "
-                "or safe area with no mud, rocks, debris, or landslide"
+                "a clear road or clear area with no mud, "
+                "no rocks, no landslide debris, and no soil "
+                "blocking the road"
             ),
 
             (
@@ -168,102 +240,138 @@ RESOLUTION_PROMPTS = {
                 "soil, rubble, or landslide debris blocking "
                 "a road or area"
             ),
+
             (
-                "a cat, dog, pet, selfie, food, document, screenshot, "
-                "or unrelated random object"
+                "a cat, dog, pet, selfie, food, document, "
+                "screenshot, indoor object, or unrelated "
+                "random image"
             ),
         ],
     },
+
+
     "Fire": {
 
         "labels": [
             "Clear fire scene",
             "Active fire",
-            "Road closed or blocked",
             "Unrelated random image",
         ],
 
         "prompts": [
 
             (
-                "a normal safe house, normal building, clear area, "
-                "or safe scene with no fire, no smoke, and no flames"
+                "a normal safe building or clear area with "
+                "no flames, no fire, and no visible smoke"
             ),
 
             (
-                "an active fire, flames, burning building, "
-                "wildfire, or heavy smoke"
+                "an active fire with flames, burning building, "
+                "wildfire, smoke, or visible burning objects"
             ),
 
             (
-                "a cat, dog, pet, selfie, food, document, screenshot, "
-                "or unrelated random object"
+                "a cat, dog, pet, selfie, food, document, "
+                "screenshot, indoor object, or unrelated "
+                "random image"
             ),
         ],
     },
+
+
     "Fallen Tree": {
 
         "labels": [
             "Clear fallen tree scene",
             "Active fallen tree hazard",
-            "Road closed or blocked",
             "Unrelated random image",
         ],
 
         "prompts": [
 
             (
-                "a clear road, normal dry street, normal house, "
-                "or safe area after a fallen tree has been removed"
+                "a clear road with no fallen tree, "
+                "no branches blocking the road, and a safe "
+                "area after the fallen tree has been removed"
             ),
 
             (
                 "a fallen tree blocking a road, path, "
-                "vehicle, or building"
+                "vehicle, building, or other area"
             ),
 
             (
-                "a cat, dog, pet, selfie, food, document, screenshot, "
-                "or unrelated random object"
+                "a cat, dog, pet, selfie, food, document, "
+                "screenshot, indoor object, or unrelated "
+                "random image"
             ),
         ],
     },
+
+
     "Other": {
 
         "labels": [
             "Clear emergency scene",
             "Active emergency scene",
-            "Road closed or blocked",
             "Unrelated random image",
         ],
 
         "prompts": [
 
             (
-                "a normal safe house, normal dry road, clear area, "
-                "or safe scene with no disaster and no emergency"
+                "a normal safe house, normal road, clear area, "
+                "and a scene with no disaster and no emergency"
             ),
 
             (
                 "an active emergency, natural disaster, "
-                "visible danger, or serious damage"
+                "visible danger, serious accident, or serious damage"
             ),
 
             (
-                "a cat, dog, pet, selfie, food, document, screenshot, "
-                "or unrelated random object"
+                "a cat, dog, pet, selfie, food, document, "
+                "screenshot, indoor object, or unrelated "
+                "random image"
             ),
         ],
     },
 }
 
-# Random pet/selfie/document images are rejected at 45%.
+
+# ============================================================
+# THRESHOLDS
+# ============================================================
+
+# If another disaster type is detected with at least this
+# confidence, we reject the resolution proof.
+#
+# Example:
+#
+# Original = Blocked Road
+# Detected  = Flood 72%
+#
+# => REJECT
+#
+TYPE_MISMATCH_REJECT_CONFIDENCE = 0.35
+
+
+# If the "No Incident" class is sufficiently strong, the image
+# can potentially represent a cleared scene.
+NO_INCIDENT_ACCEPT_CONFIDENCE = 0.35
+
+
+# Random unrelated images are rejected above this confidence.
 UNRELATED_REJECT_CONFIDENCE = 0.45
 
-# Only very confident active hazards are rejected.
-# Normal house/normal road images will be treated as clear scenes.
-ACTIVE_HAZARD_REJECT_CONFIDENCE = 0.80
 
+# Active hazard needs strong evidence before rejection.
+ACTIVE_HAZARD_REJECT_CONFIDENCE = 0.65
+
+
+# ============================================================
+# MODEL
+# ============================================================
 
 def get_model():
 
@@ -446,8 +554,14 @@ def classify_incident_type(image):
 # ============================================================
 
 def verify_incident_image(image_path):
-    """CV analysis for a newly reported incident image."""
-    is_valid, width, height, image_format = get_image_details(image_path)
+
+    """
+    CV analysis for a newly reported incident image.
+    """
+
+    is_valid, width, height, image_format = (
+        get_image_details(image_path)
+    )
 
     if not is_valid:
 
@@ -544,18 +658,43 @@ def verify_incident_image(image_path):
         prediction = detections[0]
 
         return {
-            "status": "pending_review",
-            "confidence_score": round(prediction["confidence"] / 100, 4),
-            "detected_labels": [prediction["label"]],
-            "detections": detections,
-            "image_width": width,
-            "image_height": height,
-            "image_format": image_format,
-            "model": "CLIP Zero-Shot Image Classifier",
-            "message": (
-                f"Computer Vision prediction: {prediction['label']} "
-                f"({prediction['confidence']}%)."
-            ),
+
+            "status":
+                "pending_review",
+
+            "confidence_score":
+                round(
+                    prediction["confidence"] / 100,
+                    4,
+                ),
+
+            "detected_labels":
+                [prediction["label"]],
+
+            "detected_type":
+                prediction["label"],
+
+            "detections":
+                detections,
+
+            "image_width":
+                width,
+
+            "image_height":
+                height,
+
+            "image_format":
+                image_format,
+
+            "model":
+                "CLIP Zero-Shot Image Classifier",
+
+            "message":
+                (
+                    "Computer Vision prediction: "
+                    f"{prediction['label']} "
+                    f"({prediction['confidence']}%)."
+                ),
         }
 
     except Exception as error:
@@ -590,14 +729,37 @@ def verify_incident_image(image_path):
 # RESOLUTION PROOF VERIFICATION
 # ============================================================
 
-def verify_resolution_proof(image_path, incident_type):
-    """
-    Automatic proof verification.
+def verify_resolution_proof(
+    image_path,
+    incident_type,
+):
 
-    Normal dry house/road/clear scene -> approved.
-    Very clear active incident -> rejected.
-    Cat/dog/selfie/food/document -> rejected.
     """
+    Verify whether an uploaded image is valid proof
+    that an incident has been resolved.
+
+    IMPORTANT TWO-STAGE PROCESS:
+
+    Stage 1:
+        Determine what type of incident is actually visible.
+
+    Stage 2:
+        Determine whether the original incident is still active
+        or has been cleared.
+
+    This prevents:
+
+        Blocked Road incident
+                    +
+        Flood image
+                    =
+        WRONG APPROVAL
+
+    """
+
+    # ========================================================
+    # IMAGE VALIDATION
+    # ========================================================
 
     is_valid, width, height, image_format = (
         get_image_details(image_path)
@@ -930,20 +1092,74 @@ def verify_resolution_proof(image_path, incident_type):
         # RESOLUTION PREDICTION
         # ====================================================
 
-        best_result = detections[0]
-        label = best_result["label"]
-        confidence = best_result["confidence"] / 100
+        best_resolution = (
+            resolution_detections[0]
+        )
+
+        resolution_label = (
+            best_resolution["label"]
+        )
+
+        resolution_confidence = (
+            best_resolution["confidence"]
+            / 100
+        )
+
+        # ====================================================
+        # RESULT OBJECT
+        # ====================================================
 
         result = {
-            "confidence_score": round(confidence, 4),
-            "detected_labels": [label],
-            "detections": detections,
-            "image_width": width,
-            "image_height": height,
-            "image_format": image_format,
-            "model": "CLIP Resolution Proof Verifier",
-            "incident_type": incident_type,
-            "mode": "Automatic_Resolution_Proof_Check",
+
+            "confidence_score":
+                round(
+                    resolution_confidence,
+                    4,
+                ),
+
+            "detected_labels":
+                [resolution_label],
+
+            "detections":
+                resolution_detections,
+
+            "incident_type":
+                original_incident_type,
+
+            "detected_type":
+                detected_type,
+
+            "detected_type_confidence":
+                round(
+                    detected_type_confidence,
+                    4,
+                ),
+
+            "expected_type":
+                original_incident_type,
+
+            "incident_type_matches":
+                (
+                    detected_type
+                    == original_incident_type
+                    or detected_type
+                    == "No Incident"
+                ),
+
+            "image_width":
+                width,
+
+            "image_height":
+                height,
+
+            "image_format":
+                image_format,
+
+            "model":
+                "CLIP Resolution Proof Verifier",
+
+            "mode":
+                "Two_Stage_Resolution_Verification",
         }
 
         # ====================================================
@@ -962,11 +1178,19 @@ def verify_resolution_proof(image_path, incident_type):
             return {
 
                 **result,
-                "status": "rejected",
-                "message": (
-                    f"Proof rejected: uploaded image is unrelated "
-                    f"to the {incident_type} incident."
-                ),
+
+                "status":
+                    "rejected",
+
+                "reason":
+                    "unrelated_image",
+
+                "message":
+                    (
+                        "Proof rejected. The uploaded "
+                        "image appears to be unrelated "
+                        "to the incident."
+                    ),
             }
 
         # ====================================================
@@ -1003,22 +1227,311 @@ def verify_resolution_proof(image_path, incident_type):
             return {
 
                 **result,
-                "status": "rejected",
-                "message": (
-                    f"Proof rejected: computer vision strongly indicates "
-                    f"that the {incident_type} hazard may still be active."
-                ),
+
+                "status":
+                    "rejected",
+
+                "reason":
+                    "hazard_still_active",
+
+                "message":
+                    (
+                        "Proof rejected. Computer Vision "
+                        "strongly indicates that the "
+                        f"{original_incident_type} hazard "
+                        "may still be active."
+                    ),
             }
 
-        # Clear/normal home or road is automatically accepted here.
+        # ====================================================
+        # CASE 3
+        #
+        # ANOTHER INCIDENT IS DETECTED BUT BELOW THE HARD
+        # MISMATCH THRESHOLD.
+        #
+        # If the image is clearly NOT a clean scene, be
+        # conservative instead of automatically approving.
+        # ====================================================
+
+        if (
+            detected_type
+            != original_incident_type
+            and detected_type
+            != "No Incident"
+        ):
+
+            return {
+
+                **result,
+
+                "status":
+                    "needs_new_proof",
+
+                "reason":
+                    "uncertain_incident_type",
+
+                "message":
+                    (
+                        "Computer Vision detected a scene "
+                        "that does not clearly match the "
+                        "original incident. Please upload "
+                        "clearer resolution proof."
+                    ),
+            }
+
+        # ====================================================
+        # CASE 4
+        #
+        # NO INCIDENT + CLEAR SCENE
+        #
+        # This is what we want for a resolved incident.
+        #
+        # Example:
+        #
+        # Blocked Road
+        #       ↓
+        # Clear road
+        #       ↓
+        # No Incident detected
+        #       ↓
+        # Clear blocked-road scene
+        #       ↓
+        # APPROVE
+        # ====================================================
+
+        if (
+            detected_type
+            == "No Incident"
+            and resolution_label
+            == "Clear blocked road scene"
+            and original_incident_type
+            == "Blocked Road"
+        ):
+
+            return {
+
+                **result,
+
+                "status":
+                    "approved",
+
+                "reason":
+                    "incident_cleared",
+
+                "message":
+                    (
+                        "Proof accepted. The image shows "
+                        "a clear road with no visible "
+                        "road blockage."
+                    ),
+            }
+
+        if (
+            detected_type
+            == "No Incident"
+            and resolution_label
+            == "Clear flood scene"
+            and original_incident_type
+            == "Flood"
+        ):
+
+            return {
+
+                **result,
+
+                "status":
+                    "approved",
+
+                "reason":
+                    "incident_cleared",
+
+                "message":
+                    (
+                        "Proof accepted. The image shows "
+                        "a clear scene with no visible "
+                        "flooding or waterlogging."
+                    ),
+            }
+
+        if (
+            detected_type
+            == "No Incident"
+            and resolution_label
+            == "Clear structural damage scene"
+            and original_incident_type
+            == "Structural Damage"
+        ):
+
+            return {
+
+                **result,
+
+                "status":
+                    "approved",
+
+                "reason":
+                    "incident_cleared",
+
+                "message":
+                    (
+                        "Proof accepted. The image shows "
+                        "a normal safe structure with no "
+                        "obvious structural damage."
+                    ),
+            }
+
+        if (
+            detected_type
+            == "No Incident"
+            and resolution_label
+            == "Clear landslide scene"
+            and original_incident_type
+            == "Landslide"
+        ):
+
+            return {
+
+                **result,
+
+                "status":
+                    "approved",
+
+                "reason":
+                    "incident_cleared",
+
+                "message":
+                    (
+                        "Proof accepted. The image shows "
+                        "a clear area with no visible "
+                        "landslide debris."
+                    ),
+            }
+
+        if (
+            detected_type
+            == "No Incident"
+            and resolution_label
+            == "Clear fire scene"
+            and original_incident_type
+            == "Fire"
+        ):
+
+            return {
+
+                **result,
+
+                "status":
+                    "approved",
+
+                "reason":
+                    "incident_cleared",
+
+                "message":
+                    (
+                        "Proof accepted. The image shows "
+                        "no visible flames or active fire."
+                    ),
+            }
+
+        if (
+            detected_type
+            == "No Incident"
+            and resolution_label
+            == "Clear fallen tree scene"
+            and original_incident_type
+            == "Fallen Tree"
+        ):
+
+            return {
+
+                **result,
+
+                "status":
+                    "approved",
+
+                "reason":
+                    "incident_cleared",
+
+                "message":
+                    (
+                        "Proof accepted. The image shows "
+                        "a clear area with no visible "
+                        "fallen-tree obstruction."
+                    ),
+            }
+
+        # ====================================================
+        # CASE 5
+        #
+        # OTHER INCIDENT
+        # ====================================================
+
+        if (
+            original_incident_type
+            == "Other"
+            and detected_type
+            == "No Incident"
+            and resolution_label
+            == "Clear emergency scene"
+        ):
+
+            return {
+
+                **result,
+
+                "status":
+                    "approved",
+
+                "reason":
+                    "incident_cleared",
+
+                "message":
+                    (
+                        "Proof accepted. The image shows "
+                        "a clear scene with no visible "
+                        "emergency."
+                    ),
+            }
+
+        # ====================================================
+        # CASE 6
+        #
+        # EVERYTHING ELSE IS NOT SAFE ENOUGH TO APPROVE
+        #
+        # This is deliberate.
+        #
+        # Previously your code did:
+        #
+        #     anything not rejected
+        #            ↓
+        #         APPROVED
+        #
+        # That was dangerous.
+        #
+        # Now:
+        #
+        #     anything not clearly approved
+        #            ↓
+        #       NEEDS NEW PROOF
+        # ====================================================
+
         return {
+
             **result,
-            "status": "approved",
-            "message": (
-                f"Proof accepted: computer vision verified a clear "
-                f"{incident_type} scene with "
-                f"{best_result['confidence']}% confidence."
-            ),
+
+            "status":
+                "needs_new_proof",
+
+            "reason":
+                "insufficient_resolution_evidence",
+
+            "message":
+                (
+                    "Computer Vision could not confidently "
+                    "verify that the incident has been "
+                    "resolved. Please upload a clearer "
+                    "photo of the affected area."
+                ),
         }
 
     # ========================================================
