@@ -1,10 +1,20 @@
 from datetime import datetime
+from bson.errors import InvalidId
 from bson.objectid import ObjectId
 from flask import Blueprint, jsonify, request
 
 from app.models.shelter import Shelter
+from app.services.resolution import archive_and_delete
 
 admin_bp = Blueprint("admin", __name__)
+
+
+def _oid(value):
+    """Safe ObjectId conversion; returns None for an invalid id."""
+    try:
+        return ObjectId(value)
+    except (InvalidId, TypeError):
+        return None
 
 
 def init_admin_routes(mongo_db):
@@ -47,6 +57,11 @@ def init_admin_routes(mongo_db):
             {"status": "VERIFIED"}
         )
 
+        # NEW: resolution proofs waiting for the admin
+        pending_resolutions = mongo_db.resolution_requests.count_documents(
+            {"status": "PENDING_REVIEW"}
+        )
+
         # Count shelters using MongoEngine
         total_shelters = Shelter.objects.count()
 
@@ -56,6 +71,8 @@ def init_admin_routes(mongo_db):
                     "total_incidents": total_incidents,
                     "pending_incidents": pending_incidents,
                     "verified_incidents": verified_incidents,
+                    "pending_resolutions": pending_resolutions,
+                    "needs_review": pending_incidents + pending_resolutions,
                     "total_shelters": total_shelters,
                 }
             ),
@@ -71,7 +88,10 @@ def init_admin_routes(mongo_db):
         if status_filter:
             query["status"] = status_filter
 
-        incidents = list(mongo_db.incidents.find(query))
+        # CHANGED: newest first
+        incidents = list(
+            mongo_db.incidents.find(query).sort("created_at", -1)
+        )
 
         for item in incidents:
             item["_id"] = str(item["_id"])
@@ -88,8 +108,14 @@ def init_admin_routes(mongo_db):
         if new_status not in ["VERIFIED", "REJECTED", "PENDING"]:
             return jsonify({"message": "Invalid status"}), 400
 
+        # CHANGED: an invalid id now returns 400 instead of crashing (500)
+        oid = _oid(incident_id)
+
+        if oid is None:
+            return jsonify({"message": "Invalid incident id"}), 400
+
         result = mongo_db.incidents.update_one(
-            {"_id": ObjectId(incident_id)},
+            {"_id": oid},
             {
                 "$set": {
                     "status": new_status,
@@ -102,6 +128,91 @@ def init_admin_routes(mongo_db):
             return jsonify({"message": "Incident not found"}), 404
 
         return jsonify({"message": f"Incident updated to {new_status}"}), 200
+
+    # NEW 3b. Resolution proofs the computer vision was not sure about
+    @admin_bp.route("/admin/resolution-requests", methods=["GET"])
+    def get_resolution_requests():
+        status = request.args.get("status", "PENDING_REVIEW")
+
+        items = list(
+            mongo_db.resolution_requests.find({"status": status}).sort(
+                "created_at", -1
+            )
+        )
+
+        for item in items:
+            item["_id"] = str(item["_id"])
+
+        return jsonify(items), 200
+
+    @admin_bp.route(
+        "/admin/resolution-requests/<request_id>", methods=["PATCH"]
+    )
+    def decide_resolution_request(request_id):
+        data = request.get_json() or {}
+        action = data.get("action")
+
+        if action not in ("approve", "reject"):
+            return (
+                jsonify({"message": "action must be 'approve' or 'reject'"}),
+                400,
+            )
+
+        rid = _oid(request_id)
+
+        if rid is None:
+            return jsonify({"message": "Invalid request id"}), 400
+
+        resolution_request = mongo_db.resolution_requests.find_one(
+            {"_id": rid}
+        )
+
+        if not resolution_request:
+            return jsonify({"message": "Request not found"}), 404
+
+        incident = mongo_db.incidents.find_one(
+            {"_id": _oid(resolution_request["incident_id"])}
+        )
+
+        if action == "approve":
+            # archive in `resolved_incidents`, then delete from `incidents`
+            if incident:
+                archive_and_delete(
+                    mongo_db,
+                    incident,
+                    resolution_request.get("proof_url"),
+                    "admin",
+                    resolution_request.get("cv"),
+                )
+
+            new_status = "APPROVED"
+
+        else:
+            # let the user upload another proof
+            if incident:
+                mongo_db.incidents.update_one(
+                    {"_id": incident["_id"]},
+                    {"$unset": {"resolution_pending": ""}},
+                )
+
+            new_status = "REJECTED"
+
+        mongo_db.resolution_requests.update_one(
+            {"_id": rid},
+            {
+                "$set": {
+                    "status": new_status,
+                    "decided_at": datetime.utcnow(),
+                }
+            },
+        )
+
+        return (
+            jsonify(
+                {"message": f"Resolution request {new_status.lower()}"}
+            ),
+            200,
+        )
 
     # 4. Shelter Management (MongoEngine)
 

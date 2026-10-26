@@ -12,6 +12,7 @@ from app.services.cv_service import (
     verify_incident_image,
     verify_resolution_proof,
 )
+from app.services.resolution import archive_and_delete
 from app.services.weather_service import verify_with_weather
 
 
@@ -24,6 +25,15 @@ UPLOAD_FOLDER = os.path.join(
 
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 INCIDENT_MATCH_RADIUS_METERS = 100
+
+# CV-approved reports are published straight away (VERIFIED).
+# Set to False if every report must still be verified by the admin.
+AUTO_VERIFY_ON_CV_APPROVAL = True
+
+# CV-approved resolution: archive the incident to `resolved_incidents`
+# and delete it from `incidents`. Set to False to keep the old behaviour
+# (status = RESOLVED, record stays in `incidents`).
+DELETE_ON_RESOLVE = True
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -134,7 +144,9 @@ def init_incident_routes(db):
                 "message": "Only JPG, JPEG, PNG, and WEBP images are allowed.",
             }), 400
 
-        incident_type = request.form.get("type", "Flood")
+        # CHANGED: no silent default to "Flood". The user must choose a type,
+        # because the CV check compares the photo against that type.
+        incident_type = (request.form.get("type") or "").strip()
 
         allowed_incident_types = [
             "Flood",
@@ -149,10 +161,38 @@ def init_incident_routes(db):
         if incident_type not in allowed_incident_types:
             return jsonify({
                 "status": "error",
-                "message": "Invalid incident type.",
+                "message": "Please select a valid incident type.",
             }), 400
 
-        description = request.form.get("description", "").strip()
+        # NEW: "Other" needs a description of the disaster.
+        custom_type = (request.form.get("custom_type") or "").strip()
+
+        if incident_type == "Other":
+            if len(custom_type) < 3:
+                return jsonify({
+                    "status": "error",
+                    "message": (
+                        "Please describe the disaster type "
+                        "(at least 3 characters)."
+                    ),
+                }), 400
+
+            if len(custom_type) > 80:
+                return jsonify({
+                    "status": "error",
+                    "message": (
+                        "Disaster description must be "
+                        "80 characters or fewer."
+                    ),
+                }), 400
+        else:
+            custom_type = ""
+
+        description = request.form.get(
+            "description",
+            "",
+        ).strip()
+
         severity = request.form.get("severity", "Medium")
         reporter_id = request.form.get("reporter_id", "anonymous")
 
@@ -198,7 +238,30 @@ def init_incident_routes(db):
 
         file.save(filepath)
 
-        cv_result = verify_incident_image(filepath)
+        except Exception as error:
+            return jsonify({
+                "status": "error",
+                "message": "Could not save uploaded image.",
+                "error": str(error),
+            }), 500
+
+        # NEW: hashes of photos already used, to catch re-used images.
+        known_hashes = [
+            (str(item["_id"]), item["image_phash"])
+            for item in db.incidents.find(
+                {"image_phash": {"$exists": True, "$ne": None}},
+                {"image_phash": 1},
+            )
+        ]
+
+        try:
+            # CHANGED: the CV now receives the selected type.
+            cv_result = verify_incident_image(
+                filepath,
+                incident_type,
+                custom_type or None,
+                known_hashes,
+            )
 
         if cv_result.get("status") == "invalid_image":
             if os.path.exists(filepath):
@@ -212,16 +275,45 @@ def init_incident_routes(db):
                 ),
             }), 400
 
+        # NEW: irrelevant / wrong-type photos are rejected here, BEFORE the
+        # nearby-duplicate check, so a bad photo can never count as a
+        # community confirmation either.
+        if cv_result.get("status") == "rejected":
+            delete_file_safely(filepath)
+
+            return jsonify({
+                "status": "rejected",
+                "message": cv_result.get(
+                    "message",
+                    "Photo rejected: it does not match the incident.",
+                ),
+                "reason": cv_result.get("reason"),
+                "verification": {
+                    "cv": cv_result,
+                },
+            }), 422
+
         weather_result = verify_with_weather(
             latitude,
             longitude,
             incident_type,
         )
 
-        location_name = get_readable_location(latitude, longitude)
+        location_name = get_readable_location(
+            latitude,
+            longitude,
+        )
 
-        incident_status = "PENDING"
-        cv_result["status"] = "pending_review"
+        # CHANGED: status now follows the CV decision instead of always
+        # being forced to PENDING.
+        cv_status = cv_result.get("status", "pending_review")
+
+        if cv_status == "approved" and AUTO_VERIFY_ON_CV_APPROVAL:
+            incident_status = "VERIFIED"
+            overall_confidence = "CV verified"
+        else:
+            incident_status = "PENDING"
+            overall_confidence = "Pending review"
 
         existing_incidents = db.incidents.find({
             "type": incident_type,
@@ -295,10 +387,18 @@ def init_incident_routes(db):
         incident_doc = {
             "reporter_id": reporter_id,
             "type": incident_type,
+            # NEW: custom text for "Other", and one field the UI can show.
+            "custom_type": custom_type or None,
+            "display_type": custom_type or incident_type,
             "severity": severity,
             "description": description,
             "image_url": f"uploads/{filename}",
             "original_filename": original_filename,
+            # NEW: re-use detection + past-photo note shown in the alert.
+            "image_phash": cv_result.get("phash"),
+            "is_past_photo": cv_result.get("is_past_photo", False),
+            "photo_note": cv_result.get("photo_note"),
+            "photo_captured_at": cv_result.get("captured_at"),
             "location_name": location_name,
             "location": {
                 "type": "Point",
@@ -310,7 +410,8 @@ def init_incident_routes(db):
                 "height": cv_result.get("image_height"),
             },
             "cv_verification": {
-                "status": cv_result.get("status", "pending_review"),
+                "status": cv_status,
+                "reason": cv_result.get("reason"),
                 "confidence_score": cv_result.get(
                     "confidence_score",
                     0.0,
@@ -327,7 +428,7 @@ def init_incident_routes(db):
                 "message": cv_result.get("message", ""),
             },
             "weather_verification": weather_result,
-            "overall_confidence": "Pending review",
+            "overall_confidence": overall_confidence,
             "status": incident_status,
             "upcount": 1,
             "community_confidence": "Low",
@@ -337,11 +438,28 @@ def init_incident_routes(db):
 
         inserted_id = db.incidents.insert_one(incident_doc).inserted_id
 
+        if incident_status == "VERIFIED":
+            message = "Incident verified and published."
+        else:
+            message = (
+                "Incident submitted and sent to the admin "
+                "for review."
+            )
+
+        if incident_status == "VERIFIED":
+            message = "Incident verified and published."
+        else:
+            message = (
+                "Incident submitted and sent to the admin "
+                "for review."
+            )
+
         return jsonify({
             "status": "success",
-            "message": "Incident submitted successfully.",
+            "message": message,
             "incident_id": str(inserted_id),
             "location_name": location_name,
+            "photo_note": cv_result.get("photo_note"),
             "verification": {
                 "cv": cv_result,
                 "weather": weather_result,
@@ -426,6 +544,16 @@ def init_incident_routes(db):
                     "message": "This incident is already resolved.",
                 }), 400
 
+            # NEW: one proof at a time while the admin is deciding.
+            if existing_incident.get("resolution_pending"):
+                return jsonify({
+                    "status": "error",
+                    "message": (
+                        "A resolution proof for this incident "
+                        "is already waiting for admin review."
+                    ),
+                }), 409
+
             original_filename = secure_filename(file.filename)
             filename = f"proof_{uuid.uuid4().hex}_{original_filename}"
             filepath = os.path.join(UPLOAD_FOLDER, filename)
@@ -434,11 +562,12 @@ def init_incident_routes(db):
 
             incident_type = existing_incident.get("type", "Other")
 
-            # CV automatically checks if this proof matches the incident type
-            # and whether the hazard appears cleared.
             proof_result = verify_resolution_proof(
                 filepath,
                 incident_type,
+                existing_incident.get("custom_type"),
+                original_image_path,
+                existing_incident.get("created_at"),
             )
 
             # A broken/non-image file is removed.
@@ -462,8 +591,39 @@ def init_incident_routes(db):
                 "verification": proof_result,
             }
 
-            # Do NOT delete the incident.
-            # Keep proof history in MongoDB for transparent CV evidence.
+            # NEW: approved -> archive then delete from `incidents`.
+            if (
+                proof_result.get("status") == "approved"
+                and DELETE_ON_RESOLVE
+            ):
+                existing_incident.setdefault(
+                    "resolution_proofs",
+                    [],
+                ).append(proof_document)
+
+                archive_and_delete(
+                    db,
+                    existing_incident,
+                    f"uploads/{filename}",
+                    "cv",
+                    proof_result,
+                )
+
+                return jsonify({
+                    "status": "success",
+                    "resolved": True,
+                    "deleted": True,
+                    "message": proof_result.get(
+                        "message",
+                        (
+                            "Proof accepted. Incident "
+                            "resolved and removed."
+                        ),
+                    ),
+                    "proof_url": f"uploads/{filename}",
+                    "verification": proof_result,
+                }), 200
+
             db.incidents.update_one(
                 query_filter,
                 {
@@ -535,12 +695,52 @@ def init_incident_routes(db):
                         "message",
                         "Proof rejected. Incident remains active.",
                     ),
+                    "reason": proof_result.get("reason"),
                     "proof_url": f"uploads/{filename}",
                     "verification": proof_result,
                 }), 422
 
-            # CV could not confidently prove the scene is resolved:
-            # incident remains active and citizen must send better proof.
+            # NEW: CV not confident -> admin decides.
+            if proof_result.get("status") == "pending_review":
+                db.resolution_requests.insert_one({
+                    "incident_id": str(existing_incident["_id"]),
+                    "incident_type": (
+                        existing_incident.get("custom_type")
+                        or incident_type
+                    ),
+                    "original_image_url": existing_incident.get(
+                        "image_url"
+                    ),
+                    "proof_url": f"uploads/{filename}",
+                    "cv": proof_result,
+                    "status": "PENDING_REVIEW",
+                    "created_at": datetime.utcnow(),
+                })
+
+                db.incidents.update_one(
+                    query_filter,
+                    {
+                        "$set": {
+                            "resolution_pending": True,
+                            "last_proof_status":
+                                "PENDING_ADMIN_REVIEW",
+                            "updated_at": datetime.utcnow(),
+                        }
+                    },
+                )
+
+                return jsonify({
+                    "status": "pending_review",
+                    "resolved": False,
+                    "message": (
+                        "We could not confidently verify this "
+                        "proof, so it was sent to the admin "
+                        "for review."
+                    ),
+                    "proof_url": f"uploads/{filename}",
+                    "verification": proof_result,
+                }), 202
+
             db.incidents.update_one(
                 query_filter,
                 {

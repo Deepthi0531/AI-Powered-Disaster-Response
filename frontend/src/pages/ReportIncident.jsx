@@ -20,6 +20,7 @@ export default function ReportIncident() {
   const [file, setFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [incidentType, setIncidentType] = useState('Flood');
+  const [customType, setCustomType] = useState(''); // NEW: text for "Other"
   const [severity, setSeverity] = useState('Medium');
   const [description, setDescription] = useState('');
   const [location, setLocation] = useState(null);
@@ -119,6 +120,14 @@ export default function ReportIncident() {
     setImagePreview(URL.createObjectURL(selectedFile));
   };
 
+  const handleTypeChange = (value) => {
+    setIncidentType(value);
+
+    if (value !== 'Other') {
+      setCustomType('');
+    }
+  };
+
   const useCurrentLocation = () => {
     if (!navigator.geolocation) {
       setLocationMessage('Location is not supported by this browser.');
@@ -180,6 +189,12 @@ export default function ReportIncident() {
       return;
     }
 
+    // NEW: "Other" needs a description of the incident type
+    if (incidentType === 'Other' && customType.trim().length < 3) {
+      alert('Please enter the type of incident (at least 3 characters).');
+      return;
+    }
+
     if (!location || !location.latitude || !location.longitude) {
       alert('Please provide a valid location via GPS, map click, or manual inputs.');
       return;
@@ -191,6 +206,11 @@ export default function ReportIncident() {
 
     formData.append('image', file);
     formData.append('type', incidentType);
+
+    if (incidentType === 'Other') {
+      formData.append('custom_type', customType.trim());
+    }
+
     formData.append('severity', severity);
     formData.append('description', description.trim());
     formData.append('latitude', location.latitude);
@@ -204,26 +224,49 @@ export default function ReportIncident() {
         timeout: 60000,
       });
 
-      const predictedType =
-        response.data.verification?.cv?.detected_labels?.[0] || 'Pending';
+      const overallStatus = response.data.verification?.overall_status;
+      const photoNote = response.data.photo_note;
+
+      // CHANGED: message now follows the real result instead of always "PENDING"
+      let statusLine;
+
+      if (response.data.duplicate) {
+        statusLine = 'Your report was counted as a confirmation of an existing incident.';
+      } else if (overallStatus === 'VERIFIED') {
+        statusLine = 'Status: VERIFIED — your report is now visible in alerts.';
+      } else {
+        statusLine = 'Status: PENDING — waiting for admin approval.';
+      }
 
       alert(
         `Report submitted successfully!\n\n` +
         `Report ID: ${response.data.incident_id}\n` +
-        `Verification Result: ${predictedType}\n` +
-        `Status: PENDING — waiting for admin approval.`
+        `${statusLine}` +
+        (photoNote ? `\n\nNote: ${photoNote}` : '')
       );
 
       setFile(null);
       setImagePreview(null);
       setIncidentType('Flood');
+      setCustomType('');
       setSeverity('Medium');
       setDescription('');
       setLocation(null);
       setLocationMessage('');
     } catch (error) {
       console.error('Submission failed:', error);
-      alert(error.response?.data?.message || 'Failed to submit report.');
+
+      // CHANGED: 422 = the photo was rejected by computer vision
+      if (error.response?.status === 422) {
+        alert(
+          `Report rejected\n\n${
+            error.response.data?.message ||
+            'The photo does not match the selected incident type.'
+          }`
+        );
+      } else {
+        alert(error.response?.data?.message || 'Failed to submit report.');
+      }
     } finally {
       setLoading(false);
     }
@@ -248,7 +291,7 @@ export default function ReportIncident() {
             <label style={{ display: 'block', marginBottom: '6px' }}>Incident Type:</label>
             <select
               value={incidentType}
-              onChange={(event) => setIncidentType(event.target.value)}
+              onChange={(event) => handleTypeChange(event.target.value)}
               required
               style={{ width: '100%', padding: '8px', borderRadius: '4px' }}
             >
@@ -261,6 +304,27 @@ export default function ReportIncident() {
               <option value="Other">Other</option>
             </select>
           </div>
+
+          {/* NEW: shown only when "Other" is selected */}
+          {incidentType === 'Other' && (
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', marginBottom: '6px' }}>
+                Enter the type of incident:
+              </label>
+              <input
+                type="text"
+                value={customType}
+                onChange={(event) => setCustomType(event.target.value)}
+                placeholder="e.g. Gas leak, sinkhole, electric pole fallen"
+                maxLength={80}
+                required
+                style={{ width: '100%', padding: '8px', borderRadius: '4px' }}
+              />
+              <small style={{ display: 'block', marginTop: '4px' }}>
+                Your photo will be checked against this description.
+              </small>
+            </div>
+          )}
 
           <div style={{ marginBottom: '16px' }}>
             <label style={{ display: 'block', marginBottom: '6px' }}>Severity Level:</label>
@@ -377,7 +441,7 @@ export default function ReportIncident() {
               cursor: loading ? 'not-allowed' : 'pointer',
             }}
           >
-            {loading ? 'Submitting Report...' : 'Submit Report'}
+            {loading ? 'Checking photo and submitting...' : 'Submit Report'}
           </button>
         </form>
 
