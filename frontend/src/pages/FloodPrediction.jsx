@@ -1,5 +1,19 @@
 import { useState, useEffect, useRef } from 'react';
 import API from '../api/axios';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+
+import iconUrl from 'leaflet/dist/images/marker-icon.png';
+import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png';
+import shadowUrl from 'leaflet/dist/images/marker-shadow.png';
+
+// Fix Leaflet's default icon paths
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconUrl,
+  iconRetinaUrl,
+  shadowUrl,
+});
 
 function AnimatedProbability({ label, value, color, delay }) {
   const [width, setWidth] = useState(0);
@@ -57,6 +71,54 @@ function RiskBadge({ risk }) {
   );
 }
 
+// Custom Map Component
+function PredictionMap({ lat, lng, onLocationSelect }) {
+  const mapContainer = useRef(null);
+  const mapRef = useRef(null);
+  const markerRef = useRef(null);
+
+  useEffect(() => {
+    if (!mapContainer.current || mapRef.current) return;
+
+    // Initialize map (Fallback to Mysuru if no coords)
+    const initialLat = lat ? parseFloat(lat) : 12.2958;
+    const initialLng = lng ? parseFloat(lng) : 76.6394;
+
+    mapRef.current = L.map(mapContainer.current).setView([initialLat, initialLng], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+    }).addTo(mapRef.current);
+
+    // Handle map clicks
+    mapRef.current.on('click', (e) => {
+      onLocationSelect(e.latlng.lat, e.latlng.lng);
+    });
+
+    return () => {
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
+  }, []);
+
+  // Update map and marker when lat/lng change from outside (e.g., GPS or Geocoding)
+  useEffect(() => {
+    if (mapRef.current && lat && lng && !isNaN(lat) && !isNaN(lng)) {
+      const newPos = [parseFloat(lat), parseFloat(lng)];
+      mapRef.current.setView(newPos, 14);
+
+      if (!markerRef.current) {
+        markerRef.current = L.marker(newPos).addTo(mapRef.current);
+      } else {
+        markerRef.current.setLatLng(newPos);
+      }
+    }
+  }, [lat, lng]);
+
+  return <div ref={mapContainer} style={{ height: '280px', width: '100%', borderRadius: '8px', marginTop: '1.25rem', zIndex: 1 }} />;
+}
+
 export default function FloodPrediction() {
   const [formData, setFormData] = useState({
     latitude: '',
@@ -97,15 +159,32 @@ export default function FloodPrediction() {
           ...prev,
           latitude: position.coords.latitude.toFixed(6),
           longitude: position.coords.longitude.toFixed(6),
+          location_name: '', // Clear manual location name when using GPS
         }));
         setLocationLoading(false);
       },
       () => {
-        setErrorMessage('Unable to get location access.');
+        setErrorMessage('Unable to get location access. Please click the map manually.');
         setLocationLoading(false);
       },
       { enableHighAccuracy: true }
     );
+  };
+
+  // Get live location automatically on component mount
+  useEffect(() => {
+    getCurrentLocation();
+  }, []);
+
+  const handleMapPinSelect = (lat, lng) => {
+    setFormData((prev) => ({
+      ...prev,
+      latitude: lat.toFixed(6),
+      longitude: lng.toFixed(6),
+      location_name: '', // Clear manual location name since a raw pin was dropped
+    }));
+    setPrediction(null);
+    setShowResult(false);
   };
 
   const handleSubmit = async (e) => {
@@ -119,7 +198,8 @@ export default function FloodPrediction() {
     let lng = formData.longitude ? Number(formData.longitude) : null;
 
     try {
-      if ((!lat || !lng) && formData.location_name && formData.location_name.trim()) {
+      // If a location name is provided but coords are missing or user is forcing an address search
+      if (formData.location_name && formData.location_name.trim()) {
         setGeocodingLoading(true);
         const geoResponse = await fetch(
           `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
@@ -146,7 +226,7 @@ export default function FloodPrediction() {
       }
 
       if (lat === null || lng === null || isNaN(lat) || isNaN(lng)) {
-        setErrorMessage('Please enter a valid location name or latitude and longitude.');
+        setErrorMessage('Please enter a valid location name, or click the map to select a point.');
         setLoading(false);
         return;
       }
@@ -193,7 +273,7 @@ export default function FloodPrediction() {
                   name="location_name"
                   value={formData.location_name}
                   onChange={handleChange}
-                  placeholder="e.g. Mysuru or search area"
+                  placeholder="e.g. Mysuru or type address to search"
                   style={{
                     width: '100%',
                     padding: '10px 14px',
@@ -205,48 +285,50 @@ export default function FloodPrediction() {
                 />
               </div>
 
-              <div>
-                <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#94a3b8' }}>
-                  Latitude
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  name="latitude"
-                  value={formData.latitude}
-                  onChange={handleChange}
-                  placeholder="Enter latitude"
-                  style={{
-                    width: '100%',
-                    padding: '10px 14px',
-                    borderRadius: '8px',
-                    border: '1px solid rgba(148, 163, 184, 0.2)',
-                    backgroundColor: '#0f172a',
-                    color: '#ffffff',
-                  }}
-                />
-              </div>
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#94a3b8' }}>
+                    Latitude
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    name="latitude"
+                    value={formData.latitude}
+                    onChange={handleChange}
+                    placeholder="Auto-filled via map"
+                    style={{
+                      width: '100%',
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(148, 163, 184, 0.2)',
+                      backgroundColor: '#0f172a',
+                      color: '#ffffff',
+                    }}
+                  />
+                </div>
 
-              <div>
-                <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#94a3b8' }}>
-                  Longitude
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  name="longitude"
-                  value={formData.longitude}
-                  onChange={handleChange}
-                  placeholder="Enter longitude"
-                  style={{
-                    width: '100%',
-                    padding: '10px 14px',
-                    borderRadius: '8px',
-                    border: '1px solid rgba(148, 163, 184, 0.2)',
-                    backgroundColor: '#0f172a',
-                    color: '#ffffff',
-                  }}
-                />
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.85rem', color: '#94a3b8' }}>
+                    Longitude
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    name="longitude"
+                    value={formData.longitude}
+                    onChange={handleChange}
+                    placeholder="Auto-filled via map"
+                    style={{
+                      width: '100%',
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(148, 163, 184, 0.2)',
+                      backgroundColor: '#0f172a',
+                      color: '#ffffff',
+                    }}
+                  />
+                </div>
               </div>
 
               <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -264,7 +346,7 @@ export default function FloodPrediction() {
                     cursor: 'pointer',
                   }}
                 >
-                  {locationLoading ? 'Getting Location...' : 'Use Current Location'}
+                  {locationLoading ? 'Locating...' : 'My Location'}
                 </button>
 
                 <button
@@ -282,7 +364,7 @@ export default function FloodPrediction() {
                     cursor: 'pointer',
                   }}
                 >
-                  {loading || geocodingLoading ? 'Processing Model...' : 'Calculate Flood Risk'}
+                  {loading || geocodingLoading ? 'Processing...' : 'Calculate Risk'}
                 </button>
               </div>
             </form>
@@ -293,40 +375,12 @@ export default function FloodPrediction() {
               </div>
             )}
 
-            <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid rgba(148,163,184,0.1)' }}>
-              <p style={{ margin: '0 0 0.75rem', fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>
-                QUICK LOCATIONS
-              </p>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                {[
-                  { name: 'Kathmandu', lat: 27.7172, lng: 85.324 },
-                  { name: 'Pokhara', lat: 28.2096, lng: 83.9856 },
-                  { name: 'Chitwan', lat: 27.5291, lng: 84.3542 },
-                  { name: 'Biratnagar', lat: 26.4525, lng: 87.2718 },
-                ].map((loc) => (
-                  <button
-                    key={loc.name}
-                    type="button"
-                    onClick={() => {
-                      setFormData({ latitude: String(loc.lat), longitude: String(loc.lng), location_name: loc.name });
-                      setPrediction(null);
-                      setShowResult(false);
-                    }}
-                    style={{
-                      padding: '5px 12px',
-                      borderRadius: '8px',
-                      fontSize: '0.78rem',
-                      border: '1px solid rgba(148,163,184,0.15)',
-                      background: 'rgba(255,255,255,0.03)',
-                      color: '#94a3b8',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {loc.name}
-                  </button>
-                ))}
-              </div>
-            </div>
+            {/* Interactive Location Selector Map */}
+            <PredictionMap 
+              lat={formData.latitude} 
+              lng={formData.longitude} 
+              onLocationSelect={handleMapPinSelect} 
+            />
           </div>
 
           <div ref={resultRef}>
