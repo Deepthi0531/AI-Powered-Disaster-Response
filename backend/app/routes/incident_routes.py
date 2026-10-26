@@ -238,12 +238,7 @@ def init_incident_routes(db):
 
         file.save(filepath)
 
-        except Exception as error:
-            return jsonify({
-                "status": "error",
-                "message": "Could not save uploaded image.",
-                "error": str(error),
-            }), 500
+        
 
         # NEW: hashes of photos already used, to catch re-used images.
         known_hashes = [
@@ -262,6 +257,13 @@ def init_incident_routes(db):
                 custom_type or None,
                 known_hashes,
             )
+
+        except Exception as error:
+                    return jsonify({
+                        "status": "error",
+                        "message": "Could not save uploaded image.",
+                        "error": str(error),
+                    }), 500
 
         if cv_result.get("status") == "invalid_image":
             if os.path.exists(filepath):
