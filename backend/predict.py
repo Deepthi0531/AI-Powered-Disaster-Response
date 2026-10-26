@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 # Safe ML Component Loader (Includes LabelEncoder)
 # --------------------------------------------------
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 MODEL_PATH = os.path.join(BASE_DIR, "models", "flood_risk_xgb_model.pkl")
 PREPROCESSOR_PATH = os.path.join(BASE_DIR, "models", "flood_risk_preprocessor.pkl")
