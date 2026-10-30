@@ -37,6 +37,13 @@ DELETE_ON_RESOLVE = True
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+def delete_file_safely(path):
+    """Remove a file if it exists, without crashing the request."""
+    try:
+        if path and os.path.exists(path):
+            os.remove(path)
+    except Exception as error:
+        print(f"File delete error: {error}")
 
 def allowed_file(filename):
     return (

@@ -7,6 +7,8 @@ import iconUrl from 'leaflet/dist/images/marker-icon.png';
 import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png';
 import shadowUrl from 'leaflet/dist/images/marker-shadow.png';
 
+import EXIF from 'exif-js';
+
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconUrl,
@@ -118,6 +120,26 @@ export default function ReportIncident() {
 
     setFile(selectedFile);
     setImagePreview(URL.createObjectURL(selectedFile));
+
+    // Extract EXIF to auto-fill latitude and longitude instantly
+    EXIF.getData(selectedFile, function() {
+      const lat = EXIF.getTag(this, "GPSLatitude");
+      const lng = EXIF.getTag(this, "GPSLongitude");
+      const latRef = EXIF.getTag(this, "GPSLatitudeRef");
+      const lngRef = EXIF.getTag(this, "GPSLongitudeRef");
+
+      if (lat && lng && latRef && lngRef) {
+        // Convert EXIF Degrees, Minutes, Seconds to Decimal format
+        const latDecimal = (lat[0] + lat[1]/60 + lat[2]/3600) * (latRef === "N" ? 1 : -1);
+        const lngDecimal = (lng[0] + lng[1]/60 + lng[2]/3600) * (lngRef === "E" ? 1 : -1);
+
+        setLocation({
+          latitude: parseFloat(latDecimal.toFixed(6)),
+          longitude: parseFloat(lngDecimal.toFixed(6))
+        });
+        setLocationMessage('Location auto-filled from photo GPS data.');
+      }
+    });
   };
 
   const handleTypeChange = (value) => {

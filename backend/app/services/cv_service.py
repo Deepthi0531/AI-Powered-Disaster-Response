@@ -1,9 +1,8 @@
 import logging
 import os
-import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, UnidentifiedImageError
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +20,7 @@ try:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     CV_MODEL_LOADED = True
 except Exception as error:
-
-    logger.warning(
-        f"CLIP dependencies unavailable: {error}"
-    )
-
+    logger.warning(f"CLIP dependencies unavailable: {error}")
     CV_MODEL_LOADED = False
 
 try:
@@ -45,12 +40,18 @@ MAX_PHOTO_AGE_HOURS = 24         # older = "past photo" (accepted, flagged in al
 MAX_PAST_PHOTO_DAYS = 30         # older than this -> admin review
 DUPLICATE_HASH_DISTANCE = 5      # perceptual-hash distance = same image
 
+# True  -> photos with no EXIF capture time go to admin review (flagged)
+# False -> same, but you could change the code below to reject instead.
+# Gallery downloads / screenshots usually have no EXIF time.
+REQUIRE_PHOTO_TIMESTAMP_FOR_AUTO_APPROVE = True
+
 PROOF_UNRELATED_REJECT = 0.45
 PROOF_ROAD_CLOSED_REJECT = 0.45
 PROOF_HAZARD_STILL = 0.60        # total hazard probability -> still active
 PROOF_HAZARD_GONE = 0.35         # at or below -> hazard cleared
 PROOF_SCENE_OK = 0.80            # image-to-image similarity: same place
 PROOF_SCENE_BAD = 0.60           # below this: different place -> reject
+PROOF_NORMAL_SCENE_MIN = 0.50    # used when no original photo is available
 
 
 # ------------------------------------------------------------------
@@ -157,7 +158,9 @@ LABELS = {
     "cartoon_or_meme": "Cartoon / meme",
     "normal_scene": "Normal scene, no incident",
     "road_closed": "Road closed / barricade",
+    "Custom": "Custom incident",
 }
+
 IRRELEVANT_TEXT = {
     "selfie_or_portrait": "a selfie or portrait",
     "screenshot_or_text": "a screenshot or text image",
@@ -174,7 +177,6 @@ _group_cache = {}
 # Model helpers
 # ------------------------------------------------------------------
 def get_model():
-
     global processor
     global model
 
@@ -182,31 +184,23 @@ def get_model():
         return None, None
 
     if processor is None or model is None:
-        processor = AutoProcessor.from_pretrained(MODEL_ID)
-
-        model = AutoModelForZeroShotImageClassification.from_pretrained(
-            MODEL_ID
-        )
-
+        processor = CLIPProcessor.from_pretrained(MODEL_ID)
+        model = CLIPModel.from_pretrained(MODEL_ID)
         model.to(device)
-
         model.eval()
-
-        logger.info(
-            f"CLIP loaded on device: {device}"
-        )
+        logger.info(f"CLIP loaded on device: {device}")
 
     return processor, model
 
 
-# ============================================================
-# IMAGE VALIDATION
-# ============================================================
-
 def _tensor(x):
+    """Newer transformers versions may return an output object."""
     if torch.is_tensor(x):
         return x
-    return getattr(x, "pooler_output", x[0])
+    pooled = getattr(x, "pooler_output", None)
+    if pooled is not None:
+        return pooled
+    return x[0]
 
 
 def _embed_text(prompts):
@@ -233,13 +227,16 @@ def _group_vectors(custom_text=None):
     for name, prompts in ALL_PROMPTS.items():
         if name not in _group_cache:
             _group_cache[name] = _embed_text(prompts)
+
     vectors = dict(_group_cache)
+
     if custom_text:
         vectors["Custom"] = _embed_text([
             f"a photo of {custom_text}",
             f"a photo showing {custom_text}",
             f"an emergency scene of {custom_text}",
         ])
+
     return vectors
 
 
@@ -262,354 +259,460 @@ def _detections(probs, top=5):
 # Image helpers
 # ------------------------------------------------------------------
 def get_image_details(image_path):
-    if not os.path.exists(image_path):
+    if not image_path or not os.path.exists(image_path):
         return False, None, None, None
 
     try:
-
         with Image.open(image_path) as image:
             image.verify()
 
         with Image.open(image_path) as image:
-            return (
-                True,
-                image.size[0],
-                image.size[1],
-                image.format,
-            )
+            return True, image.size[0], image.size[1], image.format
 
     except UnidentifiedImageError:
-
         return False, None, None, None
 
     except Exception as error:
-
-        logger.error(
-            f"Image validation error: {error}"
-        )
-
+        logger.error(f"Image validation error: {error}")
         return False, None, None, None
 
 
-def classify_image(image, labels, prompts):
-    image_processor, clip_model = get_model()
+def _read_capture_time(image_path):
+    """Return the EXIF capture time (naive datetime) or None."""
+    try:
+        with Image.open(image_path) as img:
+            exif = img.getexif()
+            value = None
 
-    if not image_processor or not clip_model:
+            try:
+                # 0x8769 = Exif sub-IFD, tag 36867 = DateTimeOriginal
+                value = exif.get_ifd(0x8769).get(36867)
+            except Exception:
+                value = None
+
+            if not value:
+                value = exif.get(36867) or exif.get(306)  # 306 = DateTime
+
+            if not value:
+                return None
+
+            return datetime.strptime(str(value).strip(), "%Y:%m:%d %H:%M:%S")
+    except Exception as error:
+        logger.info(f"EXIF read failed: {error}")
         return None
 
-    inputs = image_processor(
-        text=prompts,
-        images=image,
-        return_tensors="pt",
-        padding=True,
-    )
 
-    inputs = {
-        key: value.to(device)
-        for key, value in inputs.items()
+def _compute_phash(image_path):
+    if imagehash is None:
+        return None
+    try:
+        with Image.open(image_path) as img:
+            return str(imagehash.phash(img.convert("RGB")))
+    except Exception as error:
+        logger.info(f"phash failed: {error}")
+        return None
+
+
+def _is_duplicate(phash, known_hashes):
+    if not phash or not known_hashes or imagehash is None:
+        return None
+
+    new_hash = imagehash.hex_to_hash(phash)
+
+    for item in known_hashes:
+        try:
+            incident_id, old_hash = item
+            distance = new_hash - imagehash.hex_to_hash(old_hash)
+            if distance <= DUPLICATE_HASH_DISTANCE:
+                return incident_id
+        except Exception:
+            continue
+
+    return None
+
+
+def _result(status, message, **extra):
+    base = {
+        "status": status,
+        "message": message,
+        "confidence_score": 0.0,
+        "detected_labels": [],
+        "detections": [],
+        "model": "CLIP Zero-Shot Image Classifier",
     }
-
-    with torch.no_grad():
-        outputs = clip_model(**inputs)
-        probabilities = outputs.logits_per_image[0].softmax(dim=0)
-
-    detections = [
-        {
-            "label": label,
-            "confidence": round(score * 100, 2),
-        }
-        for label, score in zip(
-            labels,
-            probabilities.cpu().tolist(),
-        )
-    ]
-
-    detections.sort(
-        key=lambda detection: detection["confidence"],
-        reverse=True,
-    )
-
-    return detections
+    base.update(extra)
+    return base
 
 
-def verify_incident_image(image_path):
-    """Screen a newly submitted incident image."""
+# ============================================================
+# NEW INCIDENT PHOTO VERIFICATION
+# ============================================================
+def verify_incident_image(
+    image_path,
+    incident_type="Other",
+    custom_type=None,
+    known_hashes=None,
+):
+    """
+    Screen a newly submitted incident photo.
+
+    invalid_image  -> not an image
+    rejected       -> duplicate, unrelated, no incident visible, wrong type
+    approved       -> matches the selected type with enough confidence
+    pending_review -> not confident / no timestamp / very old / CV unavailable
+    """
 
     is_valid, width, height, image_format = get_image_details(image_path)
 
     if not is_valid:
+        return _result(
+            "invalid_image",
+            "The uploaded file is not a valid image.",
+        )
 
-        return {
-            "status": "invalid_image",
-            "confidence_score": 0.0,
-            "detected_labels": [],
-            "detections": [],
-            "model": "CLIP Zero-Shot Image Classifier",
-            "message": "The uploaded file is not a valid image.",
-        }
+    image_info = {
+        "image_width": width,
+        "image_height": height,
+        "image_format": image_format,
+    }
+
+    # ---------- re-used photo check ----------
+    phash = _compute_phash(image_path)
+    duplicate_of = _is_duplicate(phash, known_hashes)
+
+    if duplicate_of:
+        return _result(
+            "rejected",
+            "Photo rejected: this image has already been used for "
+            "another report. Please take a new photo.",
+            reason="duplicate_image",
+            phash=phash,
+            **image_info,
+        )
+
+    # ---------- photo age check (EXIF) ----------
+    captured_at = _read_capture_time(image_path)
+    is_past_photo = False
+    photo_note = None
+    force_review = False
+
+    if captured_at is None:
+        is_past_photo = True
+        photo_note = (
+            "The photo has no capture time, so its age could not be "
+            "confirmed."
+        )
+        if REQUIRE_PHOTO_TIMESTAMP_FOR_AUTO_APPROVE:
+            force_review = True
+    else:
+        age_hours = (datetime.now() - captured_at).total_seconds() / 3600.0
+
+        if age_hours > MAX_PHOTO_AGE_HOURS:
+            is_past_photo = True
+            days = int(age_hours // 24)
+            photo_note = (
+                f"This photo was taken about {days} day(s) ago "
+                "(past photo)."
+                if days >= 1
+                else f"This photo was taken {int(age_hours)} hours ago "
+                     "(past photo)."
+            )
+
+            if age_hours > MAX_PAST_PHOTO_DAYS * 24:
+                force_review = True
+
+    extra = {
+        **image_info,
+        "phash": phash,
+        "is_past_photo": is_past_photo,
+        "photo_note": photo_note,
+        "captured_at": captured_at.isoformat() if captured_at else None,
+    }
 
     if not CV_MODEL_LOADED:
+        return _result(
+            "pending_review",
+            "Image is valid, but computer vision is unavailable. "
+            "Sent for admin review.",
+            model="Computer Vision Unavailable",
+            **extra,
+        )
 
-        return {
-            "status": "pending_review",
-            "confidence_score": 0.0,
-            "detected_labels": ["Image received"],
-            "detections": [],
-            "image_width": width,
-            "image_height": height,
-            "image_format": image_format,
-            "model": "Computer Vision Unavailable",
-            "message": "Image is valid but CV is unavailable.",
-        }
-
+    # ---------- CLIP classification ----------
     try:
         with Image.open(image_path) as source_image:
             image = source_image.convert("RGB")
 
-            detections = classify_image(
-                image,
-                INCIDENT_TYPES,
-                INCIDENT_PROMPTS,
+        custom_text = custom_type if incident_type == "Other" else None
+        vectors = _group_vectors(custom_text)
+        image_vec = _embed_image(image)
+
+        # road_closed is only meaningful for resolution proofs.
+        probs = _classify(image_vec, vectors, exclude=("road_closed",))
+
+        if incident_type in HAZARD_PROMPTS:
+            target = incident_type
+        elif "Custom" in probs:
+            target = "Custom"
+        else:
+            target = None
+
+        target_p = probs.get(target, 0.0) if target else 0.0
+
+        irrelevant_probs = {
+            k: v for k, v in probs.items() if k in IRRELEVANT_PROMPTS
+        }
+        worst_irrelevant = (
+            max(irrelevant_probs, key=irrelevant_probs.get)
+            if irrelevant_probs else None
+        )
+        irrelevant_p = (
+            irrelevant_probs[worst_irrelevant] if worst_irrelevant else 0.0
+        )
+
+        normal_p = probs.get("normal_scene", 0.0)
+
+        other_hazards = {
+            k: v for k, v in probs.items()
+            if k in HAZARD_PROMPTS and k != target
+        }
+        best_other = (
+            max(other_hazards, key=other_hazards.get)
+            if other_hazards else None
+        )
+        best_other_p = other_hazards[best_other] if best_other else 0.0
+
+        top = sorted(probs.items(), key=lambda kv: kv[1], reverse=True)[0]
+
+        shared = {
+            **extra,
+            "confidence_score": round(target_p, 4),
+            "detected_labels": [LABELS.get(top[0], top[0])],
+            "detections": _detections(probs),
+        }
+
+        shown_type = custom_type if incident_type == "Other" else incident_type
+
+        if worst_irrelevant and irrelevant_p >= UNRELATED_REJECT:
+            return _result(
+                "rejected",
+                "Photo rejected: it looks like "
+                f"{IRRELEVANT_TEXT[worst_irrelevant]}, not a photo of "
+                "an incident.",
+                reason="unrelated_image",
+                **shared,
             )
 
-        if not detections:
-            return {
-                "status": "pending_review",
-                "confidence_score": 0.0,
-                "detected_labels": [],
-                "detections": [],
-                "model": "CLIP Zero-Shot Image Classifier",
-                "message": "CV could not analyse this image.",
-            }
+        if normal_p >= UNRELATED_REJECT or target_p < MIN_TARGET:
+            return _result(
+                "rejected",
+                f"Photo rejected: no {shown_type} is visible in this photo.",
+                reason="no_incident_visible",
+                **shared,
+            )
 
-        prediction = detections[0]
+        if best_other_p >= MISMATCH_REJECT and best_other_p > target_p:
+            return _result(
+                "rejected",
+                f"Photo rejected: it looks like {best_other}, "
+                f"not {shown_type}. Please select the correct type.",
+                reason="type_mismatch",
+                **shared,
+            )
 
-        return {
-            "status": "pending_review",
-            "confidence_score": round(
-                prediction["confidence"] / 100,
-                4,
-            ),
-            "detected_labels": [prediction["label"]],
-            "detections": detections,
-            "image_width": width,
-            "image_height": height,
-            "image_format": image_format,
-            "model": "CLIP Zero-Shot Image Classifier",
-            "message": (
-                f"Computer Vision prediction: "
-                f"{prediction['label']} "
-                f"({prediction['confidence']}%)."
-            ),
-        }
+        if target_p >= ACCEPT_THRESHOLD and not force_review:
+            return _result(
+                "approved",
+                f"Photo matches {shown_type} "
+                f"({round(target_p * 100, 1)}% confidence).",
+                reason="type_verified",
+                **shared,
+            )
+
+        message = (
+            f"Photo could not be confidently matched to {shown_type}. "
+            "Sent for admin review."
+        )
+        if force_review and photo_note:
+            message = f"{photo_note} Sent for admin review."
+
+        return _result(
+            "pending_review",
+            message,
+            reason="needs_review",
+            **shared,
+        )
 
     except Exception as error:
-        logger.error(f"Initial incident CV error: {error}")
-
-        return {
-            "status": "pending_review",
-            "confidence_score": 0.0,
-            "detected_labels": [],
-            "detections": [],
-            "model": "CLIP Zero-Shot Image Classifier",
-            "message": "CV could not analyse this image.",
-        }
+        logger.exception(f"Incident CV error: {error}")
+        return _result(
+            "pending_review",
+            "CV could not analyse this image. Sent for admin review.",
+            **extra,
+        )
 
 
 # ============================================================
 # RESOLUTION PROOF VERIFICATION
 # ============================================================
-
-def verify_resolution_proof(image_path, incident_type):
+def verify_resolution_proof(
+    image_path,
+    incident_type="Other",
+    custom_type=None,
+    original_image_path=None,
+    incident_created_at=None,
+):
     """
-    Verify proof submitted for an active incident.
-
-    Clear, safe and open scene -> approved.
-    Active disaster -> rejected.
-    Road closure, barricade or detour -> rejected.
-    Random unrelated image -> rejected.
-    Low-confidence result -> needs a clearer proof image.
+    approved         -> hazard gone AND same place as the original photo
+    rejected         -> unrelated / road still closed / hazard still there /
+                        different place
+    pending_review   -> CV unsure -> admin decides
     """
 
     is_valid, width, height, image_format = get_image_details(image_path)
 
     if not is_valid:
+        return _result(
+            "invalid_image",
+            "The uploaded proof is not a valid image.",
+            model="CLIP Resolution Proof Verifier",
+        )
 
-        return {
-            "status": "invalid_image",
-            "confidence_score": 0.0,
-            "detected_labels": [],
-            "detections": [],
-            "model": "CLIP Resolution Proof Verifier",
-            "message": "The uploaded proof is not a valid image.",
-        }
-
-    # ========================================================
-    # NORMALIZE INCIDENT TYPE
-    # ========================================================
-
-    original_incident_type = (
-        str(incident_type or "Other")
-        .strip()
-    )
-
-    if incident_type not in RESOLUTION_PROMPTS:
-        incident_type = "Other"
+    info = {
+        "image_width": width,
+        "image_height": height,
+        "image_format": image_format,
+        "model": "CLIP Resolution Proof Verifier",
+        "incident_type": custom_type or incident_type,
+    }
 
     if not CV_MODEL_LOADED:
-
-        return {
-            "status": "needs_new_proof",
-            "confidence_score": 0.0,
-            "detected_labels": [],
-            "detections": [],
-            "model": "Computer Vision Unavailable",
-            "message": "Computer vision is unavailable.",
-        }
+        return _result(
+            "pending_review",
+            "Computer vision is unavailable. Proof sent to the admin.",
+            **{**info, "model": "Computer Vision Unavailable"},
+        )
 
     try:
         with Image.open(image_path) as source_image:
             image = source_image.convert("RGB")
 
-            config = RESOLUTION_PROMPTS[incident_type]
+        custom_text = custom_type if incident_type == "Other" else None
+        vectors = _group_vectors(custom_text)
+        image_vec = _embed_image(image)
+        probs = _classify(image_vec, vectors)
 
-            detections = classify_image(
-                image,
-                config["labels"],
-                config["prompts"],
-            )
+        hazard_names = [
+            n for n in probs if n in HAZARD_PROMPTS or n == "Custom"
+        ]
+        hazard_total = sum(probs[n] for n in hazard_names)
 
-        if not detections:
-            return {
-                "status": "needs_new_proof",
-                "confidence_score": 0.0,
-                "detected_labels": [],
-                "detections": [],
-                "model": "CLIP Resolution Proof Verifier",
-                "message": "CV could not analyse this proof image.",
-            }
+        irrelevant_probs = {
+            k: v for k, v in probs.items() if k in IRRELEVANT_PROMPTS
+        }
+        worst_irrelevant = (
+            max(irrelevant_probs, key=irrelevant_probs.get)
+            if irrelevant_probs else None
+        )
+        irrelevant_p = (
+            irrelevant_probs[worst_irrelevant] if worst_irrelevant else 0.0
+        )
 
-        best_result = detections[0]
+        road_closed_p = probs.get("road_closed", 0.0)
+        normal_p = probs.get("normal_scene", 0.0)
 
-        label = best_result["label"]
-        confidence = best_result["confidence"] / 100
+        top = sorted(probs.items(), key=lambda kv: kv[1], reverse=True)[0]
 
-        result = {
-            "confidence_score": round(confidence, 4),
-            "detected_labels": [label],
-            "detections": detections,
-            "image_width": width,
-            "image_height": height,
-            "image_format": image_format,
-            "model": "CLIP Resolution Proof Verifier",
-            "incident_type": incident_type,
+        shared = {
+            **info,
+            "confidence_score": round(1.0 - hazard_total, 4),
+            "detected_labels": [LABELS.get(top[0], top[0])],
+            "detections": _detections(probs),
+            "hazard_probability": round(hazard_total, 4),
             "mode": "Safety_First_Resolution_Proof_Check",
         }
 
-        if (
-            label == "Unrelated random image"
-            and confidence >= UNRELATED_REJECT_CONFIDENCE
-        ):
-            return {
-                **result,
-                "status": "rejected",
-                "reason": "unrelated_image",
-                "message": (
-                    "Proof rejected: the uploaded image appears "
-                    "unrelated to the incident."
-                ),
-            }
+        if worst_irrelevant and irrelevant_p >= PROOF_UNRELATED_REJECT:
+            return _result(
+                "rejected",
+                "Proof rejected: the image looks like "
+                f"{IRRELEVANT_TEXT[worst_irrelevant]}, not the "
+                "incident location.",
+                reason="unrelated_image",
+                **shared,
+            )
 
-        if (
-            label == "Road closed or blocked"
-            and confidence >= ROAD_CLOSED_REJECT_CONFIDENCE
-        ):
-            return {
-                **result,
-                "status": "rejected",
-                "reason": "road_still_closed",
-                "message": (
-                    "Proof rejected: the road still appears closed "
-                    "or blocked. Upload an image showing that the "
-                    "area is fully open and safe."
-                ),
-            }
+        if road_closed_p >= PROOF_ROAD_CLOSED_REJECT:
+            return _result(
+                "rejected",
+                "Proof rejected: the road still appears closed or "
+                "blocked. Upload an image showing the area is open "
+                "and safe.",
+                reason="road_still_closed",
+                **shared,
+            )
 
-        active_labels = [
-            "Active flood",
-            "Active blocked road",
-            "Active structural damage",
-            "Active landslide",
-            "Active fire",
-            "Active fallen tree hazard",
-            "Active emergency scene",
-        ]
+        if hazard_total >= PROOF_HAZARD_STILL:
+            return _result(
+                "rejected",
+                "Proof rejected: computer vision indicates the "
+                "hazard may still be active.",
+                reason="hazard_still_active",
+                **shared,
+            )
 
-        if (
-            label in active_labels
-            and confidence >= ACTIVE_HAZARD_REJECT_CONFIDENCE
-        ):
-            return {
-                **result,
-                "status": "rejected",
-                "reason": "hazard_still_active",
-                "message": (
-                    "Proof rejected: computer vision indicates "
-                    f"that the {incident_type} hazard may still "
-                    "be active."
-                ),
-            }
+        # ---------- hazard looks gone: confirm it is the same place ----------
+        if hazard_total <= PROOF_HAZARD_GONE:
+            similarity = None
 
-        clear_labels = [
-            "Clear flood scene",
-            "Clear blocked road scene",
-            "Clear structural damage scene",
-            "Clear landslide scene",
-            "Clear fire scene",
-            "Clear fallen tree scene",
-            "Clear emergency scene",
-        ]
+            if original_image_path and os.path.exists(original_image_path):
+                try:
+                    with Image.open(original_image_path) as original:
+                        original_vec = _embed_image(original.convert("RGB"))
+                    similarity = float((image_vec @ original_vec).item())
+                except Exception as error:
+                    logger.info(f"Original image compare failed: {error}")
 
-        if (
-            label in clear_labels
-            and confidence >= CLEAR_SCENE_APPROVE_CONFIDENCE
-        ):
+            if similarity is not None:
+                shared["scene_similarity"] = round(similarity, 4)
 
-            return {
+                if similarity < PROOF_SCENE_BAD:
+                    return _result(
+                        "rejected",
+                        "Proof rejected: this photo does not look like "
+                        "the same location as the original report.",
+                        reason="different_place",
+                        **shared,
+                    )
 
-                **result,
-                "status": "approved",
-                "reason": "clear_scene_verified",
-                "message": (
-                    "Proof accepted: computer vision verified "
-                    f"a clear and safe {incident_type} scene "
-                    f"with {best_result['confidence']}% confidence."
-                ),
-            }
+                if similarity >= PROOF_SCENE_OK:
+                    return _result(
+                        "approved",
+                        "Proof accepted: the hazard is gone and the "
+                        "location matches the original report.",
+                        reason="clear_scene_verified",
+                        **shared,
+                    )
+            elif normal_p >= PROOF_NORMAL_SCENE_MIN:
+                return _result(
+                    "approved",
+                    "Proof accepted: the scene looks clear and safe.",
+                    reason="clear_scene_verified",
+                    **shared,
+                )
 
-        return {
-            **result,
-            "status": "needs_new_proof",
-            "reason": "uncertain_scene",
-            "message": (
-                "Proof needs a clearer image. Computer vision could "
-                "not confidently verify that the location is open "
-                "and safe."
-            ),
-        }
-
-    # ========================================================
-    # UNEXPECTED CV ERROR
-    # ========================================================
+        return _result(
+            "pending_review",
+            "Could not confidently verify this proof. It was sent to "
+            "the admin for review.",
+            reason="uncertain_scene",
+            **shared,
+        )
 
     except Exception as error:
-        logger.error(f"Proof CV verification error: {error}")
-
-        return {
-            "status": "needs_new_proof",
-            "confidence_score": 0.0,
-            "detected_labels": [],
-            "detections": [],
-            "model": "CLIP Resolution Proof Verifier",
-            "message": "CV could not verify this proof image.",
-        }
+        logger.exception(f"Proof CV verification error: {error}")
+        return _result(
+            "pending_review",
+            "CV could not verify this proof image. Sent to the admin.",
+            **info,
+        )
